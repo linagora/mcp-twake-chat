@@ -12,7 +12,7 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 
 ## Part of Twake.ai
 
-[Twake.ai](https://twake.ai) is the truly open source and sovereign Digital Workplace developed by [LINAGORA](https://linagora.com): Twake Mail, Twake Calendar, Twake Drive, Twake Chat and Twake Visio with a single account, hosted in France or on your own infrastructure.
+[Twake.ai](https://twake.ai) is the truly open source and sovereign Digital Workplace developed by [LINAGORA](https://linagora.com): Twake Mail, Twake Calendar, Twake Drive, Twake Chat, Twake Space and Twake Visio with a single account, hosted in France or on your own infrastructure.
 
 | MCP server | Twake.ai service | Protocol |
 |---|---|---|
@@ -20,6 +20,7 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 | [mcp-twake-dav](https://github.com/linagora/mcp-twake-dav) | Twake Calendar and contacts | CalDAV / CardDAV |
 | [mcp-twake-drive](https://github.com/linagora/mcp-twake-drive) | Twake Drive | cozy-stack API |
 | **mcp-twake-chat** (this project) | Twake Chat | Matrix |
+| [mcp-twake-space](https://github.com/linagora/mcp-twake-space) | Twake Space (team spaces) | Twake Space API |
 
 ## What it brings
 
