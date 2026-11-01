@@ -1,0 +1,62 @@
+{
+  "name": "mcp-twake-chat",
+  "version": "0.1.0",
+  "description": "MCP server for Twake.ai Chat (Matrix): give any MCP-compatible AI assistant secure, end-to-end encrypted access to your Twake Chat conversations",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "mcp-twake-chat": "build/index.js"
+  },
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "twake",
+    "twake.ai",
+    "twake-chat",
+    "matrix",
+    "e2ee",
+    "chat",
+    "linagora",
+    "ai",
+    "sovereign",
+    "open-source"
+  ],
+  "license": "AGPL-3.0-only",
+  "author": "LINAGORA <https://linagora.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/linagora/mcp-twake-chat.git"
+  },
+  "homepage": "https://github.com/linagora/mcp-twake-chat#readme",
+  "bugs": {
+    "url": "https://github.com/linagora/mcp-twake-chat/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "indexeddbshim": "^19.0.7",
+    "matrix-js-sdk": "^45.0.0",
+    "sqlite3": "^6.0.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}
