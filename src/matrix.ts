@@ -608,6 +608,15 @@ export class MatrixChat implements ChatService {
     return done ? { messages } : { messages, next };
   }
 
+  async message(roomId: string, eventId: string): Promise<MessageView | undefined> {
+    try {
+      const raw = await this.client.fetchRoomEvent(roomId, eventId);
+      return (await this.views(roomId, [raw]))[0];
+    } catch {
+      return undefined;
+    }
+  }
+
   async thread(roomId: string, rootId: string, limit: number): Promise<MessageView[]> {
     const root = await this.client.fetchRoomEvent(roomId, rootId);
     const rel = await this.client.fetchRelations(roomId, rootId, 'm.thread', null, { dir: this.sdk.Direction.Backward, limit });

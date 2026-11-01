@@ -8,19 +8,18 @@
  * Logs go to stderr only (stdout carries JSON-RPC in stdio mode).
  */
 import { readFileSync } from 'node:fs';
-import { createServer, type IncomingMessage } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { createServer } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { loadConfig } from './config.js';
 import { discover } from './discovery.js';
 import { MatrixChat, type Log } from './matrix.js';
 import { CommandTokenProvider, StaticTokenProvider, type TokenSource } from './token.js';
 import { TomClient } from './tom.js';
+import { createMcpHttpHandler } from './http.js';
 import { registerTools } from './tools.js';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 const threshold = LEVELS[(process.env.LOG_LEVEL as keyof typeof LEVELS) ?? 'info'] ?? LEVELS.info;
 
@@ -71,7 +70,7 @@ async function main(): Promise<void> {
 
   const newServer = () => {
     const server = new McpServer({ name: 'mcp-twake-chat', version: VERSION });
-    registerTools(server, chat, tom, { timeZone: config.timeZone, downloadDir: config.downloadDir, sendScope: config.sendScope });
+    registerTools(server, chat, tom, { timeZone: config.timeZone, downloadDir: config.downloadDir, sendScope: config.sendScope, approval: config.approval });
     return server;
   };
 
@@ -83,44 +82,9 @@ async function main(): Promise<void> {
 
   const { host, port, tokenFile } = config.transport;
   const secret = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined;
-  const authorized = (req: IncomingMessage) => {
-    if (!secret) return true;
-    const given = Buffer.from(String(req.headers.authorization ?? '').replace(/^Bearer /, ''));
-    const want = Buffer.from(secret);
-    return given.length === want.length && timingSafeEqual(given, want);
-  };
-  const http = createServer(async (req, res) => {
-    if (!req.url?.startsWith('/mcp')) {
-      res.writeHead(404).end();
-      return;
-    }
-    if (!authorized(req)) {
-      res.writeHead(401, { 'content-type': 'application/json' }).end('{"error":"unauthorized"}');
-      return;
-    }
-    if (req.method !== 'POST') {
-      res.writeHead(405, { allow: 'POST' }).end();
-      return;
-    }
-    // Stateless: one MCP server per request, all sharing the single Matrix device.
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableDnsRebindingProtection: true,
-      allowedHosts: [`${host}:${port}`, `localhost:${port}`, `127.0.0.1:${port}`],
-    });
-    const server = newServer();
-    res.on('close', () => {
-      void transport.close();
-      void server.close();
-    });
-    try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res);
-    } catch (e) {
-      log('error', `request failed: ${(e as Error).message}`);
-      if (!res.headersSent) res.writeHead(500).end();
-    }
-  });
+  // Sessions: an approval prompt sent during a tool call must reach the same server instance.
+  const handler = createMcpHttpHandler(newServer, { host, port, secret, log });
+  const http = createServer((req, res) => void handler(req, res));
   http.listen(port, host, () => log('info', `${VERSION} ready on http://${host}:${port}/mcp${secret ? ' (bearer token required)' : ''}`));
 }
 

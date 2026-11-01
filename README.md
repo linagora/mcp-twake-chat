@@ -49,7 +49,9 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 | Rooms ⚠️ | `create_room` (private, encrypted by default, or a direct message), `invite_user`, `join_room` (accept an invitation or join a public room) |
 | Destructive ⚠️ | `redact_message` (own messages only), `leave_room` |
 
-⚠️ = acts in your name, visible to other people. Read tools carry `readOnlyHint`; `create_draft` is closed-world (`openWorldHint: false`); write tools carry `openWorldHint`, and `redact_message` and `leave_room` `destructiveHint`, so clients can ask for confirmation.
+⚠️ = acts in your name, visible to other people. Read tools carry `readOnlyHint`; `create_draft` is closed-world (`openWorldHint: false`); write tools carry `openWorldHint`, and `redact_message` and `leave_room` `destructiveHint`.
+
+**Every action in your name is approved by you first.** Before any ⚠️ tool acts, in a direct message, a group room or a space, the server itself shows you the exact action through MCP elicitation (see [Prior approval](#prior-approval)) and acts only on your explicit OK. Reading, searching, downloading attachments and drafts need no approval.
 
 ### Highlights
 
@@ -99,6 +101,26 @@ The server never logs in by itself: it needs a Matrix access token **and the dev
 
 `MATRIX_CREDENTIALS_FILE` points to a file of `KEY=VALUE` lines (`MATRIX_ACCESS_TOKEN=…`, `MATRIX_DEVICE_ID=…`) to keep secrets out of the client configuration.
 
+### Prior approval
+
+With `MATRIX_APPROVAL=elicit` (the default), every write tool sends the MCP client an [elicitation](https://modelcontextprotocol.io/specification/draft/client/elicitation) request before it acts, for instance:
+
+```
+Twake Chat: Send a message
+As: Jane DOE (@jane:example.com) (your account)
+Room: Project X (group room, 12 members, end-to-end encrypted)
+In reply to: Bob DURAND, 2026-11-01 18:02: « the contract is ready »
+Text: Great news, thanks Bob!
+
+Ref. 3f9a1c · Accept to do it now, refuse to cancel.
+```
+
+- The prompt names the room and its kind (direct message, group room, space) with its member count, quotes the message being answered, reacted to, edited or deleted, and shows the exact text, file or invitees.
+- The server acts only on *accept*. A refusal, a dismissal, a timeout (`MATRIX_APPROVAL_TIMEOUT_MS`, 10 minutes) or an error sends nothing, and the tool tells the assistant not to retry.
+- A client without elicitation support gets an error and nothing is sent. Set `MATRIX_APPROVAL=client` only if your MCP client asks you to confirm every write tool itself.
+- `USER_LANGUAGE=fr` writes the prompts in French.
+- Over HTTP the server keeps one MCP session per client (`Mcp-Session-Id`), so the prompt sent during a tool call reaches the right client and its answer comes back. Idle sessions are closed after 6 hours; the client then initializes again.
+
 ### Other options
 
 | Variable | Description | Default |
@@ -110,6 +132,9 @@ The server never logs in by itself: it needs a Matrix access token **and the dev
 | `MATRIX_STORE_KEY_FILE` | Key encrypting the store (created on first start, `0600`) | `<store dir>/store.key` |
 | `MATRIX_DRAFTS_ROOM_NAME` | Name of the private drafts room | `Drafts` |
 | `MATRIX_DOWNLOAD_DIR` | Default directory of `download_attachment` | `~/Downloads/twake-chat` |
+| `MATRIX_APPROVAL` | `elicit`: the server asks you before every action in your name; `client`: your MCP client confirms | `elicit` |
+| `MATRIX_APPROVAL_TIMEOUT_MS` | How long an approval prompt waits for your answer | `600000` |
+| `USER_LANGUAGE` | Language of the approval prompts, `en` or `fr` | `en` |
 | `MATRIX_SEND_SCOPE` | `dm` restricts the write tools (`send_message`, `react`, `edit_message`, `redact_message`, `send_file`) to direct messages: group rooms are refused | `all` |
 | `MATRIX_SEARCH_INDEX` | `off` disables the local search index (encrypted rooms are then not searchable) | `on` |
 | `MATRIX_SEARCH_BACKFILL_DAYS` | History indexed in the background, in days (`0` = only new messages) | `365` |
@@ -133,16 +158,17 @@ mcp_servers:
     url: http://127.0.0.1:3995/mcp
     headers:
       Authorization: "Bearer ${TWAKE_CHAT_MCP_TOKEN}"
-    timeout: 120
-    tools:
-      exclude: [send_message, react, edit_message, redact_message, send_file, join_room, leave_room, create_room, invite_user]   # drafts only
+    timeout: 420            # longer than the approval wait
+    elicitation:
+      enabled: true
+      timeout: 300
 ```
 
-To let the assistant answer in direct messages only, start the server with `MATRIX_SEND_SCOPE=dm` and keep `send_message` out of the exclusion list; tell the assistant (system prompt) to show the recipient and the exact text and to wait for an explicit OK before each message:
+Hermes shows the approval prompts in the desktop app, the terminal or on your messaging platform, and declines them where nobody can answer (cron jobs, one-shot queries). Start the daemon with `MATRIX_APPROVAL_TIMEOUT_MS=330000` so that it waits a little longer than Hermes. For an assistant that must never act in your name, keep drafts only:
 
 ```yaml
     tools:
-      exclude: [react, edit_message, redact_message, send_file, join_room, leave_room, create_room, invite_user]
+      exclude: [send_message, react, edit_message, redact_message, send_file, join_room, leave_room, create_room, invite_user]
 ```
 
 ### Claude Code / Claude Desktop (stdio)
@@ -158,7 +184,7 @@ Do not configure the same device in two clients at once in stdio mode: the secon
 
 ## Recommended safe configuration
 
-- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK, and set `MATRIX_SEND_SCOPE=dm` so that it can never post in a group room (example above).
+- Keep `MATRIX_APPROVAL=elicit` (the default): every action in your name waits for your OK on the exact room and text, whatever the assistant decides. For an assistant that must never act in your name, exclude the write tools (drafts only, example above). `MATRIX_SEND_SCOPE=dm` additionally keeps it out of group rooms.
 - Chat messages are written by other people, possibly from other servers through federation: treat them as untrusted input (prompt injection). The tool descriptions say so to the model.
 - The access token gives access to your whole history once the recovery key is fetched from the ToM vault: protect the broker's files (`0600`), never log tokens, and revoke the device from Twake Chat's session list if in doubt.
 - Keep the HTTP transport on loopback with a bearer token.
@@ -181,6 +207,8 @@ See [SECURITY.md](SECURITY.md).
 | Symptom | Fix |
 |---|---|
 | `already used by process N` | Another server holds this device: stop it, or connect to it over HTTP. |
+| `Not done: this MCP client cannot ask the user for approval` | Your MCP client does not support elicitation: use one that does, or `MATRIX_APPROVAL=client` if it confirms writes itself. |
+| `Not done: no answer to the approval request` | The prompt timed out or nobody could answer (cron, one-shot query): nothing was sent. |
 | `token command JSON has no device_id` | The broker must print the device id that owns the token. |
 | `[encrypted message: no key on this device (…)]` | The room key is in no backup you can open (messages older than your key backup, or never backed up). A new Twake Chat session has the same limit. |
 | `encryption bootstrap incomplete` in the logs | No recovery key in the ToM vault, or it does not unlock the secret storage: use `MATRIX_E2EE_RECOVERY=key`. |

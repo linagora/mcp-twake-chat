@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { registerTools, parseWhen } from '../src/tools.js';
 import type { ChatService, Directory, MessageQuery, NewRoom, SearchRequest } from '../src/service.js';
 import type { MessageView, RoomView } from '../src/format.js';
@@ -34,6 +35,9 @@ class FakeChat implements ChatService {
   async messages(roomId: string, q: MessageQuery) {
     this.queries.push({ roomId, q });
     return { messages: [msg({ id: '$1', ts: T(6, 1), body: 'one', replyTo: '$0' }), msg({ id: '$2', ts: T(6, 2), kind: 'undecryptable', body: '[encrypted message: no key on this device (X)]' })], next: 'cursor2' };
+  }
+  async message(_roomId: string, eventId: string) {
+    return eventId === '$gone' ? undefined : msg({ id: eventId, body: 'le contrat est prêt', ts: T(8, 5) });
   }
   async thread() {
     return [msg({ id: '$root' }), msg({ id: '$r1', threadRoot: '$root' })];
@@ -113,6 +117,17 @@ const directory: Directory = {
 };
 
 let chat: FakeChat;
+let prompts: string[] = [];
+/** A client that shows approval prompts (MCP elicitation) and accepts them. */
+function approvingClient(answer: () => 'accept' | 'decline' | 'cancel' = () => 'accept'): Client {
+  const c = new Client({ name: 'c', version: '0' }, { capabilities: { elicitation: { form: {} } } });
+  c.setRequestHandler(ElicitRequestSchema, async (req) => {
+    prompts.push(req.params.message);
+    const action = answer();
+    return action === 'accept' ? { action, content: {} } : { action };
+  });
+  return c;
+}
 let client: Client;
 
 async function call(name: string, args: Record<string, unknown> = {}) {
@@ -122,11 +137,12 @@ async function call(name: string, args: Record<string, unknown> = {}) {
 }
 
 beforeEach(async () => {
+  prompts = [];
   chat = new FakeChat();
   const server = new McpServer({ name: 't', version: '0' });
   registerTools(server, chat, directory, { timeZone: 'Europe/Paris', downloadDir: '/tmp/dl' });
   const [a, b] = InMemoryTransport.createLinkedPair();
-  client = new Client({ name: 'c', version: '0' });
+  client = approvingClient();
   await Promise.all([server.connect(a), client.connect(b)]);
 });
 
@@ -269,7 +285,7 @@ describe('MATRIX_SEND_SCOPE=dm', () => {
     registerTools(server, c2, directory, { timeZone: 'Europe/Paris', sendScope: 'dm' });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await server.connect(st);
-    const cl = new Client({ name: 'c', version: '0' });
+    const cl = approvingClient();
     await cl.connect(ct);
     const call2 = async (name: string, args: Record<string, unknown>) => cl.callTool({ name, arguments: args });
     const group = await call2('send_message', { room: '!t:x', text: 'hello' });
@@ -330,5 +346,82 @@ describe('parseWhen', () => {
     expect(parseWhen('2026-11-01T06:00', 'Europe/Paris')).toBe(Date.UTC(2026, 10, 1, 5, 0));
     expect(parseWhen('2026-11-01T06:00:00Z', 'Europe/Paris')).toBe(Date.UTC(2026, 10, 1, 6, 0));
     expect(() => parseWhen('tomorrow', 'Europe/Paris')).toThrow(/date/);
+  });
+});
+
+describe('v0.5: prior approval of every action in the user name', () => {
+  const WRITES: [string, Record<string, unknown>, string][] = [
+    ['send_message', { room: '!t:x', text: 'Bonjour à tous', reply_to: '$m1' }, 'send'],
+    ['react', { room: '!t:x', event_id: '$m1', emoji: '👍' }, 'react'],
+    ['edit_message', { room: '!dm:x', event_id: '$m1', text: 'corrigé' }, 'edit'],
+    ['redact_message', { room: '!dm:x', event_id: '$m1' }, 'redact'],
+    ['send_file', { room: '!t:x', path: '/tmp/does-not-exist.pdf' }, 'file'],
+    ['join_room', { room: '#public:x' }, 'join'],
+    ['leave_room', { room: '!t2:x' }, 'leave'],
+    ['create_room', { name: 'Projet X', invite: ['@bob:x'] }, 'create'],
+    ['invite_user', { room: '!t:x', user_id: '@bob:x' }, 'invite'],
+  ];
+
+  async function connect(answer: () => 'accept' | 'decline' | 'cancel', opts: { elicitation?: boolean; mode?: 'elicit' | 'client' } = {}) {
+    const c = new FakeChat();
+    const server = new McpServer({ name: 't', version: '0' });
+    registerTools(server, c, directory, { timeZone: 'Europe/Paris', approval: { mode: opts.mode ?? 'elicit', language: 'fr', timeoutMs: 2000 } });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const cl = opts.elicitation === false ? new Client({ name: 'c', version: '0' }) : approvingClient(answer);
+    await cl.connect(ct);
+    const callIt = async (name: string, args: Record<string, unknown>) => {
+      const r = (await cl.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
+      return { isError: Boolean(r.isError), text: r.content[0].text };
+    };
+    return { c, callIt };
+  }
+
+  it.each(WRITES)('%s acts only after the user accepts', async (tool, args, kind) => {
+    const ok = await connect(() => 'accept');
+    await ok.callIt(tool, args);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toMatch(/^Twake Chat : .+\nEn tant que : Me \(@me:x\) \(votre compte\)\n/);
+    expect(prompts[0]).toMatch(/Réf\. [0-9a-f]{6} · Acceptez/);
+    expect(ok.c.writes.map((w) => w[0])).toEqual([kind]);
+    for (const answer of ['decline', 'cancel'] as const) {
+      const no = await connect(() => answer);
+      const r = await no.callIt(tool, args);
+      expect(r.text).toMatch(/^Not done: .*nothing was sent or changed/);
+      expect(no.c.writes).toEqual([]);
+    }
+  });
+
+  it('shows the room kind, the quoted message and the exact text, in group rooms too', async () => {
+    const t = await connect(() => 'accept');
+    await t.callIt('send_message', { room: '!t:x', text: 'Bonjour à tous\nà demain', reply_to: '$m1', mention_users: ['@bob:x'] });
+    expect(prompts[0]).toContain('Salon : Équipe Twake (salon de groupe, 3 membres, chiffré de bout en bout)');
+    expect(prompts[0]).toContain('En réponse à : Bob, 2026-11-01 09:05 : « le contrat est prêt »');
+    expect(prompts[0]).toContain('Notifie : @bob:x');
+    expect(prompts[0]).toContain('Texte : \nBonjour à tous\nà demain');
+    await t.callIt('react', { room: '!dm:x', event_id: '$gone', emoji: '🎉' });
+    expect(prompts[1]).toContain('Salon : Alice MARTIN (message direct, chiffré de bout en bout) · @az:x');
+    expect(prompts[1]).toContain('Message : $gone');
+    expect(new Set(prompts.map((p) => /Réf\. (\w+)/.exec(p)![1])).size).toBe(2);
+  });
+
+  it('refuses to act when the client cannot ask, unless the client confirms itself', async () => {
+    const blind = await connect(() => 'accept', { elicitation: false });
+    const r = await blind.callIt('send_message', { room: '!dm:x', text: 'x' });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/cannot ask the user for approval/);
+    expect(blind.c.writes).toEqual([]);
+    const client = await connect(() => 'accept', { elicitation: false, mode: 'client' });
+    expect((await client.callIt('send_message', { room: '!dm:x', text: 'x' })).isError).toBe(false);
+    expect(client.c.writes).toHaveLength(1);
+  });
+
+  it('never asks for reads or drafts', async () => {
+    const t = await connect(() => 'decline');
+    await t.callIt('list_rooms', {});
+    await t.callIt('get_messages', { room: '!t:x' });
+    await t.callIt('create_draft', { text: 'brouillon', room: '!t:x' });
+    expect(prompts).toEqual([]);
+    expect(t.c.drafts).toHaveLength(1);
   });
 });
