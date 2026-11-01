@@ -137,6 +137,13 @@ mcp_servers:
       exclude: [send_message, react, edit_message, redact_message, send_file, join_room, leave_room, create_room, invite_user]   # drafts only
 ```
 
+To let the assistant answer in direct messages only, start the server with `MATRIX_SEND_SCOPE=dm` and keep `send_message` out of the exclusion list; tell the assistant (system prompt) to show the recipient and the exact text and to wait for an explicit OK before each message:
+
+```yaml
+    tools:
+      exclude: [react, edit_message, redact_message, send_file, join_room, leave_room, create_room, invite_user]
+```
+
 ### Claude Code / Claude Desktop (stdio)
 
 ```bash
@@ -150,7 +157,7 @@ Do not configure the same device in two clients at once in stdio mode: the secon
 
 ## Recommended safe configuration
 
-- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK, and consider `MATRIX_SEND_SCOPE=dm` so that it can never post in a group room.
+- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK, and set `MATRIX_SEND_SCOPE=dm` so that it can never post in a group room (example above).
 - Chat messages are written by other people, possibly from other servers through federation: treat them as untrusted input (prompt injection). The tool descriptions say so to the model.
 - The access token gives access to your whole history once the recovery key is fetched from the ToM vault: protect the broker's files (`0600`), never log tokens, and revoke the device from Twake Chat's session list if in doubt.
 - Keep the HTTP transport on loopback with a bearer token.
