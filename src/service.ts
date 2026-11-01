@@ -60,6 +60,17 @@ export interface ChatService {
   mentions(sinceMs: number, limit: number): Promise<MentionHit[]>;
   /** Post a draft in the private drafts room; never in the target room. */
   postDraft(text: string, target?: RoomView): Promise<{ roomId: string; roomName: string; eventId: string }>;
+
+  // ---- write tools (v0.2): they act in the user's name, visible to the room members
+  sendMessage(roomId: string, text: string, opts: { replyTo?: string; threadRoot?: string; mentions?: string[] }): Promise<{ eventId: string }>;
+  react(roomId: string, eventId: string, key: string): Promise<{ eventId: string }>;
+  /** Only the user's own messages. */
+  editMessage(roomId: string, eventId: string, text: string): Promise<{ eventId: string }>;
+  /** Only the user's own messages. */
+  redactMessage(roomId: string, eventId: string, reason?: string): Promise<{ eventId: string }>;
+  sendFile(roomId: string, file: { path: string; name?: string; caption?: string }): Promise<{ eventId: string; name: string; size: number; encrypted: boolean }>;
+  /** Download (and decrypt) the attachment of a message into a local directory. */
+  downloadAttachment(roomId: string, eventId: string, dir: string): Promise<{ path: string; name: string; mimetype?: string; size: number }>;
 }
 
 export interface Directory {

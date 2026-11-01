@@ -4,6 +4,16 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-01
+
+### Added
+- Write tools, acting in the user's name: `send_message` (Markdown rendered to HTML, replies, threads, mentions), `react`, `edit_message` and `redact_message` (own messages only), `send_file` (encrypted upload in end-to-end encrypted rooms).
+- `download_attachment`: saves the file of a message, decrypting encrypted attachments (authenticated media endpoint, never overwrites a local file); `MATRIX_DOWNLOAD_DIR`.
+- Drafts rendered from Markdown.
+
+### Fixed
+- A deleted (redacted) encrypted message is reported as deleted, not undecryptable, and its earlier edits no longer bring its text back.
+
 ## [0.1.0] - 2026-11-01
 
 ### Added

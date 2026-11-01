@@ -117,13 +117,13 @@ export function messageFromEvent(e: RawEvent, ctx: ViewContext): MessageView {
   const view: MessageView = { id: e.event_id, sender: e.sender, senderName: ctx.names(e.sender), ts: e.origin_server_ts, kind: 'other' };
   const c = e.content ?? {};
 
+  if (e.unsigned?.redacted_because || Object.keys(c).length === 0) {
+    view.kind = 'deleted';
+    return view;
+  }
   if (ctx.undecryptable || e.type === 'm.room.encrypted') {
     view.kind = 'undecryptable';
     view.body = `[encrypted message: no key on this device (${ctx.undecryptable ?? 'UNKNOWN'})]`;
-    return view;
-  }
-  if (e.unsigned?.redacted_because || Object.keys(c).length === 0) {
-    view.kind = 'deleted';
     return view;
   }
 
@@ -188,7 +188,7 @@ export function applyEdits(messages: MessageView[]): MessageView[] {
       continue;
     }
     const edit = latest.get(m.id);
-    if (!edit) {
+    if (!edit || m.kind === 'deleted') {
       out.push(m);
       continue;
     }

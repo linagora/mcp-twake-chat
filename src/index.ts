@@ -20,7 +20,7 @@ import { CommandTokenProvider, StaticTokenProvider, type TokenSource } from './t
 import { TomClient } from './tom.js';
 import { registerTools } from './tools.js';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 const threshold = LEVELS[(process.env.LOG_LEVEL as keyof typeof LEVELS) ?? 'info'] ?? LEVELS.info;
 
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
 
   const newServer = () => {
     const server = new McpServer({ name: 'mcp-twake-chat', version: VERSION });
-    registerTools(server, chat, tom, { timeZone: config.timeZone });
+    registerTools(server, chat, tom, { timeZone: config.timeZone, downloadDir: config.downloadDir });
     return server;
   };
 

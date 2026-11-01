@@ -26,6 +26,7 @@ describe('loadConfig', () => {
     expect(c.storeKeyFile).toBe('/home/alice/.local/share/mcp-twake-chat/store.key');
     expect(c.transport).toEqual({ kind: 'stdio' });
     expect(c.draftsRoomName).toBe('Drafts');
+    expect(c.downloadDir).toBe('/home/alice/Downloads/twake-chat');
   });
 
   it('refuses plain HTTP except on localhost', () => {

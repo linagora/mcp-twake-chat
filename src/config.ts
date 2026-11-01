@@ -24,6 +24,8 @@ export interface Config {
   storeKeyFile: string;
   /** Name of the private room where drafts are posted */
   draftsRoomName: string;
+  /** Default directory for download_attachment */
+  downloadDir: string;
   transport: TransportConfig;
   timeZone: string;
   timeoutMs: number;
@@ -103,6 +105,7 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     storeDir,
     storeKeyFile: expand(env.MATRIX_STORE_KEY_FILE ?? join(storeDir, 'store.key')),
     draftsRoomName: env.MATRIX_DRAFTS_ROOM_NAME ?? 'Drafts',
+    downloadDir: expand(env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
     transport,
     timeZone: env.USER_TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     timeoutMs: Number(env.MATRIX_TIMEOUT_MS ?? 30000),

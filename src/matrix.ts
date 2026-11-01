@@ -7,7 +7,11 @@
  *   recovery key (ToM vault or file) -> SSSS -> cross-signing import + sign this device
  *   -> backup key -> restore backup.  Then a live sync keeps receiving room keys.
  */
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { decryptAttachment, encryptAttachment } from './attachment.js';
+import { editContent, fileContent, textContent } from './content.js';
+import { guessMime, parseMxc, safeName, uniquePath } from './files.js';
 import type { Config } from './config.js';
 import type { Endpoints } from './discovery.js';
 import { applyEdits, messageFromEvent, type MessageView, type RawEvent, type RoomView } from './format.js';
@@ -450,8 +454,106 @@ export class MatrixChat implements ChatService {
       throw new Error('the drafts room is not private (other members): refusing to post');
     }
     const body = target ? `✏️ ${target.name}${target.dmUserId ? ` (${target.dmUserId})` : ''}\n\n${text}` : text;
-    const res = await this.client.sendMessage(roomId, { msgtype: 'm.text', body });
+    const res = await this.client.sendMessage(roomId, textContent(body));
     return { roomId, roomName: room.name, eventId: res.event_id };
+  }
+
+  // ---------------------------------------------------------------- v0.2 write tools
+
+  private joined(roomId: string): Any {
+    const room = this.client.getRoom(roomId);
+    if (!room || room.getMyMembership() !== 'join') throw new Error(`not a member of ${roomId}`);
+    return room;
+  }
+
+  /** Fetch one event and decrypt it. */
+  private async fetchEvent(roomId: string, eventId: string): Promise<Any> {
+    const raw = await this.client.fetchRoomEvent(roomId, eventId);
+    const ev = new this.sdk.MatrixEvent({ ...raw, room_id: roomId });
+    await this.client.decryptEventIfNeeded(ev);
+    return ev;
+  }
+
+  private async ownMessage(roomId: string, eventId: string): Promise<Any> {
+    const ev = await this.fetchEvent(roomId, eventId);
+    if (ev.getSender() !== this.opts.config.userId) throw new Error('only your own messages can be edited or deleted');
+    if (ev.isRedacted?.() || Object.keys(ev.getContent() ?? {}).length === 0) throw new Error('this message is already deleted');
+    return ev;
+  }
+
+  async sendMessage(roomId: string, text: string, opts: { replyTo?: string; threadRoot?: string; mentions?: string[] }): Promise<{ eventId: string }> {
+    this.joined(roomId);
+    const res = await this.client.sendMessage(roomId, textContent(text, opts));
+    return { eventId: res.event_id };
+  }
+
+  async react(roomId: string, eventId: string, key: string): Promise<{ eventId: string }> {
+    this.joined(roomId);
+    const res = await this.client.sendEvent(roomId, 'm.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: eventId, key } });
+    return { eventId: res.event_id };
+  }
+
+  async editMessage(roomId: string, eventId: string, text: string): Promise<{ eventId: string }> {
+    this.joined(roomId);
+    const ev = await this.ownMessage(roomId, eventId);
+    if (ev.getType() !== 'm.room.message' || !['m.text', 'm.notice', 'm.emote'].includes(ev.getContent()?.msgtype)) {
+      throw new Error('only text messages can be edited');
+    }
+    const res = await this.client.sendMessage(roomId, editContent(eventId, text));
+    return { eventId: res.event_id };
+  }
+
+  async redactMessage(roomId: string, eventId: string, reason?: string): Promise<{ eventId: string }> {
+    this.joined(roomId);
+    await this.ownMessage(roomId, eventId);
+    const res = await this.client.redactEvent(roomId, eventId, undefined, reason ? { reason } : undefined);
+    return { eventId: res.event_id };
+  }
+
+  async sendFile(roomId: string, f: { path: string; name?: string; caption?: string }): Promise<{ eventId: string; name: string; size: number; encrypted: boolean }> {
+    const room = this.joined(roomId);
+    const size = statSync(f.path).size;
+    const limit: number | undefined = (await this.client.getMediaConfig().catch(() => ({})))['m.upload.size'];
+    if (limit && size > limit) throw new Error(`file too large (${size} bytes, server limit ${limit})`);
+    const name = f.name ?? basename(f.path);
+    const mimetype = guessMime(name);
+    const bytes = new Uint8Array(readFileSync(f.path));
+    const encrypted = room.hasEncryptionStateEvent();
+    let content;
+    if (encrypted) {
+      const { ciphertext, file } = await encryptAttachment(bytes);
+      const up = await this.client.uploadContent(new Blob([new Uint8Array(ciphertext)], { type: 'application/octet-stream' }), { type: 'application/octet-stream', includeFilename: false });
+      content = fileContent({ name, mimetype, size, file: { ...file, url: up.content_uri }, ...(f.caption ? { caption: f.caption } : {}) });
+    } else {
+      const up = await this.client.uploadContent(new Blob([new Uint8Array(bytes)], { type: mimetype }), { type: mimetype, name, includeFilename: true });
+      content = fileContent({ name, mimetype, size, url: up.content_uri, ...(f.caption ? { caption: f.caption } : {}) });
+    }
+    const res = await this.client.sendMessage(roomId, content);
+    return { eventId: res.event_id, name, size, encrypted };
+  }
+
+  async downloadAttachment(roomId: string, eventId: string, dir: string): Promise<{ path: string; name: string; mimetype?: string; size: number }> {
+    this.joined(roomId);
+    const ev = await this.fetchEvent(roomId, eventId);
+    if (ev.isDecryptionFailure()) throw new Error(`cannot decrypt this message (${ev.decryptionFailureReason})`);
+    const c = ev.getContent() ?? {};
+    const file = c.file;
+    const mxc: string | undefined = file?.url ?? c.url;
+    if (!mxc) throw new Error('this message has no attachment');
+    const { server, mediaId } = parseMxc(mxc);
+    const token = await this.opts.tokens.getToken();
+    const base = this.opts.endpoints.homeserverUrl;
+    const path = `${encodeURIComponent(server)}/${encodeURIComponent(mediaId)}`;
+    let res = await fetch(`${base}/_matrix/client/v1/media/download/${path}`, { headers: { authorization: `Bearer ${token}` } });
+    if (res.status === 404 || res.status === 400) res = await fetch(`${base}/_matrix/media/v3/download/${path}`); // pre-authenticated-media servers
+    if (!res.ok) throw new Error(`media download failed: HTTP ${res.status}`);
+    let bytes = new Uint8Array(await res.arrayBuffer());
+    if (file) bytes = new Uint8Array(await decryptAttachment(bytes, file));
+    const name = safeName(c.filename ?? c.body ?? mediaId);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const target = uniquePath(dir, name);
+    writeFileSync(target, bytes, { flag: 'wx' });
+    return { path: target, name, mimetype: c.info?.mimetype, size: bytes.length };
   }
 }
 

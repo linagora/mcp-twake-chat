@@ -50,6 +50,31 @@ class FakeChat implements ChatService {
     this.drafts.push({ text, target });
     return { roomId: '!drafts:x', roomName: 'Drafts', eventId: '$d1' };
   }
+  writes: unknown[][] = [];
+  async sendMessage(roomId: string, text: string, opts: object) {
+    this.writes.push(['send', roomId, text, opts]);
+    return { eventId: '$s1' };
+  }
+  async react(roomId: string, eventId: string, key: string) {
+    this.writes.push(['react', roomId, eventId, key]);
+    return { eventId: '$r1' };
+  }
+  async editMessage(roomId: string, eventId: string, text: string) {
+    this.writes.push(['edit', roomId, eventId, text]);
+    return { eventId: '$e1' };
+  }
+  async redactMessage(roomId: string, eventId: string, reason?: string) {
+    this.writes.push(['redact', roomId, eventId, reason]);
+    return { eventId: '$x1' };
+  }
+  async sendFile(roomId: string, file: { path: string; name?: string; caption?: string }) {
+    this.writes.push(['file', roomId, file]);
+    return { eventId: '$f1', name: 'report.pdf', size: 1234, encrypted: true };
+  }
+  async downloadAttachment(roomId: string, eventId: string, dir: string) {
+    this.writes.push(['download', roomId, eventId, dir]);
+    return { path: `${dir}/report.pdf`, name: 'report.pdf', mimetype: 'application/pdf', size: 1234 };
+  }
 }
 
 const directory: Directory = {
@@ -73,7 +98,7 @@ async function call(name: string, args: Record<string, unknown> = {}) {
 beforeEach(async () => {
   chat = new FakeChat();
   const server = new McpServer({ name: 't', version: '0' });
-  registerTools(server, chat, directory, { timeZone: 'Europe/Paris' });
+  registerTools(server, chat, directory, { timeZone: 'Europe/Paris', downloadDir: '/tmp/dl' });
   const [a, b] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: 'c', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -83,11 +108,18 @@ describe('tool catalogue', () => {
   it('exposes read tools as read-only and the draft tool as closed-world', async () => {
     const { tools } = await client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
+    const WRITE = ['send_message', 'react', 'edit_message', 'redact_message', 'send_file'];
     expect(Object.keys(by).sort()).toEqual(
-      ['create_draft', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_room_members', 'list_rooms', 'search_users', 'whoami'].sort(),
+      ['create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_room_members', 'list_rooms', 'search_users', 'whoami', ...WRITE].sort(),
     );
-    for (const name of Object.keys(by).filter((n) => n !== 'create_draft')) expect(by[name].annotations?.readOnlyHint).toBe(true);
+    for (const name of Object.keys(by).filter((n) => n !== 'create_draft' && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
     expect(by.create_draft.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+    for (const name of WRITE) {
+      expect(by[name].annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+      expect(by[name].description).toMatch(/in the user's name/);
+    }
+    expect(by.redact_message.annotations?.destructiveHint).toBe(true);
+    expect(by.send_message.annotations?.destructiveHint).toBe(false);
     expect(by.get_messages.description).toMatch(/untrusted|instructions/i);
   });
 });
@@ -167,6 +199,39 @@ describe('drafts', () => {
     expect(r).toMatchObject({ drafts_room: 'Drafts', for_room: 'Alice MARTIN', event_id: '$d1' });
     await call('create_draft', { text: 'note' });
     expect(chat.drafts[1]).toEqual({ text: 'note', target: undefined });
+  });
+});
+
+describe('write tools (v0.2)', () => {
+  it('sends a message with reply, thread and mentions to the resolved room', async () => {
+    const r = (await call('send_message', { room: 'martin', text: 'OK pour mardi', reply_to: '$q', thread_id: '$root', mention_users: ['@amartin:x'] })).data;
+    expect(chat.writes[0]).toEqual(['send', '!dm:x', 'OK pour mardi', { replyTo: '$q', threadRoot: '$root', mentions: ['@amartin:x'] }]);
+    expect(r).toMatchObject({ room: { room_id: '!dm:x', name: 'Alice MARTIN' }, event_id: '$s1' });
+  });
+
+  it('reacts, edits and redacts', async () => {
+    await call('react', { room: '!t:x', event_id: '$m', emoji: '👍' });
+    await call('edit_message', { room: '!t:x', event_id: '$m', text: 'fixed' });
+    await call('redact_message', { room: '!t:x', event_id: '$m', reason: 'typo' });
+    expect(chat.writes).toEqual([
+      ['react', '!t:x', '$m', '👍'],
+      ['edit', '!t:x', '$m', 'fixed'],
+      ['redact', '!t:x', '$m', 'typo'],
+    ]);
+  });
+
+  it('sends a local file given by absolute path only', async () => {
+    expect((await call('send_file', { room: '!t:x', path: 'relative.pdf' })).isError).toBe(true);
+    const r = (await call('send_file', { room: '!t:x', path: '/tmp/report.pdf', caption: 'v2' })).data;
+    expect(chat.writes.at(-1)).toEqual(['file', '!t:x', { path: '/tmp/report.pdf', caption: 'v2' }]);
+    expect(r).toMatchObject({ event_id: '$f1', name: 'report.pdf', encrypted: true });
+  });
+
+  it('downloads an attachment to the default or given directory', async () => {
+    expect((await call('download_attachment', { room: '!t:x', event_id: '$m' })).data).toMatchObject({ path: '/tmp/dl/report.pdf', size: 1234 });
+    await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: '/srv/in' });
+    expect(chat.writes.at(-1)).toEqual(['download', '!t:x', '$m', '/srv/in']);
+    expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: 'rel' })).isError).toBe(true);
   });
 });
 

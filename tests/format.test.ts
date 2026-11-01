@@ -66,6 +66,11 @@ describe('messageFromEvent', () => {
     });
   });
 
+  it('reports a redacted encrypted message as deleted, not undecryptable', () => {
+    expect(messageFromEvent(ev({ type: 'm.room.encrypted', content: {}, unsigned: { redacted_because: {} } }), { names, me: '@me:x' }).kind).toBe('deleted');
+    expect(messageFromEvent(ev({ type: 'm.room.encrypted', content: {}, unsigned: { redacted_because: {} } }), { names, me: '@me:x', undecryptable: 'X' }).kind).toBe('deleted');
+  });
+
   it('summarises polls and unknown types', () => {
     expect(messageFromEvent(ev({ type: 'org.matrix.msc3381.poll.start', content: { 'org.matrix.msc3381.poll.start': { question: { body: 'Lunch?' } } } }), { names, me: '@me:x' })).toMatchObject({ kind: 'poll', body: 'Lunch?' });
     expect(messageFromEvent(ev({ type: 'm.sticker', content: { body: 'cat' } }), { names, me: '@me:x' })).toMatchObject({ kind: 'other', body: 'cat' });
@@ -85,6 +90,14 @@ describe('applyEdits', () => {
     const e1 = messageFromEvent(ev({ event_id: '$e1', origin_server_ts: 2, content: { body: '* v1', 'm.new_content': { msgtype: 'm.text', body: 'v1' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$o' } } }), { names, me: '@me:x' });
     const e2 = messageFromEvent(ev({ event_id: '$e2', origin_server_ts: 3, content: { body: '* v2', 'm.new_content': { msgtype: 'm.text', body: 'v2' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$o' } } }), { names, me: '@me:x' });
     expect(applyEdits([o, e2, e1])).toEqual([{ ...o, body: 'v2', edited: true }]);
+  });
+});
+
+describe('applyEdits on deleted messages', () => {
+  it('never resurrects the text of a deleted message through its edits', () => {
+    const o = messageFromEvent(ev({ event_id: '$o', content: {}, unsigned: { redacted_because: {} } }), { names, me: '@me:x' });
+    const e = messageFromEvent(ev({ event_id: '$e', origin_server_ts: 9, content: { body: '* secret', 'm.new_content': { msgtype: 'm.text', body: 'secret' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$o' } } }), { names, me: '@me:x' });
+    expect(applyEdits([o, e])).toEqual([o]);
   });
 });
 

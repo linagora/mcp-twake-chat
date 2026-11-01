@@ -6,7 +6,7 @@
 
 ## What is it?
 
-`mcp-twake-chat` is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. MCP is the open standard that lets AI assistants (Claude Desktop, Claude Code, Hermes Agent, Cursor, VS Code and many others) use external tools. This server exposes your chat to the assistant as **11 tools**: rooms, messages, threads, unread messages, mentions, people, and drafts.
+`mcp-twake-chat` is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. MCP is the open standard that lets AI assistants (Claude Desktop, Claude Code, Hermes Agent, Cursor, VS Code and many others) use external tools. This server exposes your chat to the assistant as **17 tools**: rooms, messages, threads, unread messages, mentions, people, attachments, drafts and, when you allow it, sending.
 
 It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [matrix-js-sdk](https://github.com/matrix-org/matrix-js-sdk) and its Rust cryptography, so it reads **end-to-end encrypted** rooms like any Matrix client. It works with Twake Chat and with any Matrix homeserver (Synapse, Conduit…); the Twake-specific extras (company directory, recovery vault) come from the [ToM server](https://github.com/linagora/ToM-Server).
 
@@ -32,17 +32,20 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 
 ## Features
 
-### 11 MCP tools
+### 17 MCP tools
 
 | Category | Tools |
 |---|---|
 | Account | `whoami` (account, device, encryption status) |
 | Rooms | `list_rooms` (filters: kind, unread, name), `get_room_info`, `list_room_members` |
 | Messages | `get_messages` (dates, pagination, edits applied, attachments described), `get_thread`, `get_unread`, `get_mentions` |
+| Attachments | `download_attachment` (decrypts encrypted files) |
 | People | `search_users` (company directory), `get_user_profile` |
 | Drafts | `create_draft` (private drafts room only) |
+| Write ⚠️ | `send_message` (Markdown, replies, threads, mentions), `react`, `edit_message`, `send_file` (encrypted in encrypted rooms) |
+| Destructive ⚠️ | `redact_message` (own messages only) |
 
-Read tools carry `readOnlyHint`; `create_draft` is closed-world (`openWorldHint: false`). There is **no tool that sends a message to anyone** in this version.
+⚠️ = acts in your name, visible to other people. Read tools carry `readOnlyHint`; `create_draft` is closed-world (`openWorldHint: false`); write tools carry `openWorldHint` and `redact_message` `destructiveHint`, so clients can ask for confirmation.
 
 ### Highlights
 
@@ -98,6 +101,7 @@ The server never logs in by itself: it needs a Matrix access token **and the dev
 | `MATRIX_STORE_DIR` | Private directory of the encrypted crypto store | `~/.local/share/mcp-twake-chat` |
 | `MATRIX_STORE_KEY_FILE` | Key encrypting the store (created on first start, `0600`) | `<store dir>/store.key` |
 | `MATRIX_DRAFTS_ROOM_NAME` | Name of the private drafts room | `Drafts` |
+| `MATRIX_DOWNLOAD_DIR` | Default directory of `download_attachment` | `~/Downloads/twake-chat` |
 | `MCP_TRANSPORT` | `stdio` or `http` | `stdio` |
 | `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | HTTP listen address (keep it on loopback) | `127.0.0.1` / `3995` |
 | `MCP_HTTP_TOKEN_FILE` | File holding a bearer token required from HTTP clients | none |
@@ -119,6 +123,8 @@ mcp_servers:
     headers:
       Authorization: "Bearer ${TWAKE_CHAT_MCP_TOKEN}"
     timeout: 120
+    tools:
+      exclude: [send_message, react, edit_message, redact_message, send_file]   # drafts only
 ```
 
 ### Claude Code / Claude Desktop (stdio)
@@ -134,6 +140,7 @@ Do not configure the same device in two clients at once in stdio mode: the secon
 
 ## Recommended safe configuration
 
+- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message` and `send_file` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK.
 - Chat messages are written by other people, possibly from other servers through federation: treat them as untrusted input (prompt injection). The tool descriptions say so to the model.
 - The access token gives access to your whole history once the recovery key is fetched from the ToM vault: protect the broker's files (`0600`), never log tokens, and revoke the device from Twake Chat's session list if in doubt.
 - Keep the HTTP transport on loopback with a bearer token.
@@ -147,6 +154,7 @@ See [SECURITY.md](SECURITY.md).
 - "Read the last 50 messages of the Atlas project room and list the decisions."
 - "Find Bob Martin in the directory."
 - "Draft an answer to Alice proposing Tuesday at 10."
+- "Download the PDF Bob posted in the Atlas room and summarise it."
 
 ## Troubleshooting
 
@@ -166,6 +174,7 @@ npm run build
 npm test          # Vitest, no real server needed
 node build/index.js check
 node scripts/smoke.mjs   # live read-only tour of the tools against your account (counts only)
+LIVE_ROOM='!room:server' node scripts/live-write.mjs   # write tools, only in a private room where you are alone
 ```
 
 ## Contributing
