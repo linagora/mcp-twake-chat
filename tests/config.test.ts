@@ -27,6 +27,9 @@ describe('loadConfig', () => {
     expect(c.transport).toEqual({ kind: 'stdio' });
     expect(c.draftsRoomName).toBe('Drafts');
     expect(c.downloadDir).toBe('/home/alice/Downloads/twake-chat');
+    expect(c.sendScope).toBe('all');
+    expect(loadConfig({ ...base, HOME: '/h', MATRIX_SEND_SCOPE: 'dm' }).sendScope).toBe('dm');
+    expect(() => loadConfig({ ...base, HOME: '/h', MATRIX_SEND_SCOPE: 'rooms' })).toThrow(/MATRIX_SEND_SCOPE/);
     expect(c.search).toEqual({ enabled: true, file: '/home/alice/.local/share/mcp-twake-chat/search.db', backfillDays: 365 });
   });
 

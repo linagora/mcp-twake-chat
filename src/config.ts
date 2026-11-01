@@ -26,6 +26,8 @@ export interface Config {
   draftsRoomName: string;
   /** Default directory for download_attachment */
   downloadDir: string;
+  /** Where write tools may act: everywhere, or direct messages only */
+  sendScope: 'all' | 'dm';
   /** Local full-text index of readable messages (encrypted rooms included) */
   search: { enabled: boolean; file: string; backfillDays: number };
   transport: TransportConfig;
@@ -109,6 +111,7 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     draftsRoomName: env.MATRIX_DRAFTS_ROOM_NAME ?? 'Drafts',
     downloadDir: expand(env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
     search: searchConfig(env, storeDir),
+    sendScope: sendScopeOf(env.MATRIX_SEND_SCOPE),
     transport,
     timeZone: env.USER_TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     timeoutMs: Number(env.MATRIX_TIMEOUT_MS ?? 30000),
@@ -121,4 +124,10 @@ function searchConfig(env: NodeJS.ProcessEnv, storeDir: string): Config['search'
   const days = Number(env.MATRIX_SEARCH_BACKFILL_DAYS ?? 365);
   if (!Number.isInteger(days) || days < 0) throw new Error('MATRIX_SEARCH_BACKFILL_DAYS must be a number of days (0 = only new messages)');
   return { enabled: flag === 'on' || flag === 'true', file: join(storeDir, 'search.db'), backfillDays: days };
+}
+
+function sendScopeOf(v: string | undefined): Config['sendScope'] {
+  const scope = (v ?? 'all').toLowerCase();
+  if (scope !== 'all' && scope !== 'dm') throw new Error('MATRIX_SEND_SCOPE must be all or dm');
+  return scope;
 }

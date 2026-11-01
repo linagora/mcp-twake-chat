@@ -55,7 +55,7 @@ export function parseWhen(value: string, timeZone: string): number {
   return t;
 }
 
-export function registerTools(server: McpServer, chat: ChatService, directory: Directory | undefined, opts: { timeZone: string; downloadDir?: string }): void {
+export function registerTools(server: McpServer, chat: ChatService, directory: Directory | undefined, opts: { timeZone: string; downloadDir?: string; sendScope?: 'all' | 'dm' }): void {
   const tz = opts.timeZone;
   const time = (ms: number) => formatTime(ms, tz);
 
@@ -316,11 +316,20 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
 
   const eventArg = z.string().describe('Event id of the message (the "id" field returned by get_messages).');
 
+  const dmOnly = opts.sendScope === 'dm';
+  const SCOPE = dmOnly ? ' Restricted by the server to direct messages only (MATRIX_SEND_SCOPE=dm).' : '';
+  /** Room where the user may write: with MATRIX_SEND_SCOPE=dm, direct messages only. */
+  const writableRoom = (query: string): RoomView => {
+    const r = resolveRoom(query);
+    if (dmOnly && r.kind !== 'dm') throw new ToolError(`"${r.name}" is not a direct message: this server writes in direct messages only (MATRIX_SEND_SCOPE=dm). Use create_draft instead.`);
+    return r;
+  };
+
   server.registerTool(
     'send_message',
     {
       title: 'Send a message',
-      description: `Send a text message (Markdown supported) to a room or direct message, optionally as a reply or in a thread. ${IN_NAME} To prepare a text without sending it, use create_draft.`,
+      description: `Send a text message (Markdown supported) to a room or direct message, optionally as a reply or in a thread. ${IN_NAME} To prepare a text without sending it, use create_draft.${SCOPE}`,
       inputSchema: {
         room: roomArg,
         text: z.string().min(1).describe('Message text; Markdown (bold, lists, links) is rendered.'),
@@ -331,7 +340,7 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
       annotations: SEND,
     },
     wrap(async (a: { room: string; text: string; reply_to?: string; thread_id?: string; mention_users?: string[] }) => {
-      const r = resolveRoom(a.room);
+      const r = writableRoom(a.room);
       const o: { replyTo?: string; threadRoot?: string; mentions?: string[] } = {};
       if (a.reply_to) o.replyTo = a.reply_to;
       if (a.thread_id) o.threadRoot = a.thread_id;
@@ -345,12 +354,12 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
     'react',
     {
       title: 'React to a message',
-      description: `Add an emoji reaction to a message. ${IN_NAME}`,
+      description: `Add an emoji reaction to a message. ${IN_NAME}${SCOPE}`,
       inputSchema: { room: roomArg, event_id: eventArg, emoji: z.string().min(1).max(32).describe('Emoji or short text, e.g. 👍') },
       annotations: SEND,
     },
     wrap(async (a: { room: string; event_id: string; emoji: string }) => {
-      const r = resolveRoom(a.room);
+      const r = writableRoom(a.room);
       return { room: { room_id: r.id, name: r.name }, event_id: (await chat.react(r.id, a.event_id, a.emoji)).eventId };
     }),
   );
@@ -359,12 +368,12 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
     'edit_message',
     {
       title: 'Edit one of my messages',
-      description: `Replace the text of a message the user sent earlier (others see it as edited). ${IN_NAME}`,
+      description: `Replace the text of a message the user sent earlier (others see it as edited). ${IN_NAME}${SCOPE}`,
       inputSchema: { room: roomArg, event_id: eventArg, text: z.string().min(1).describe('New text (Markdown supported).') },
       annotations: SEND,
     },
     wrap(async (a: { room: string; event_id: string; text: string }) => {
-      const r = resolveRoom(a.room);
+      const r = writableRoom(a.room);
       return { room: { room_id: r.id, name: r.name }, event_id: (await chat.editMessage(r.id, a.event_id, a.text)).eventId };
     }),
   );
@@ -373,12 +382,12 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
     'redact_message',
     {
       title: 'Delete one of my messages',
-      description: `Delete (redact) a message the user sent: its content is removed for everyone and cannot be restored. ${IN_NAME}`,
+      description: `Delete (redact) a message the user sent: its content is removed for everyone and cannot be restored. ${IN_NAME}${SCOPE}`,
       inputSchema: { room: roomArg, event_id: eventArg, reason: z.string().optional() },
       annotations: DESTRUCTIVE,
     },
     wrap(async (a: { room: string; event_id: string; reason?: string }) => {
-      const r = resolveRoom(a.room);
+      const r = writableRoom(a.room);
       return { room: { room_id: r.id, name: r.name }, event_id: (await chat.redactMessage(r.id, a.event_id, a.reason)).eventId, deleted: a.event_id };
     }),
   );
@@ -387,7 +396,7 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
     'send_file',
     {
       title: 'Send a file',
-      description: `Upload a local file to a room (encrypted when the room is end-to-end encrypted), with an optional caption. ${IN_NAME}`,
+      description: `Upload a local file to a room (encrypted when the room is end-to-end encrypted), with an optional caption. ${IN_NAME}${SCOPE}`,
       inputSchema: {
         room: roomArg,
         path: z.string().describe('Absolute path of the local file.'),
@@ -398,7 +407,7 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
     },
     wrap(async (a: { room: string; path: string; name?: string; caption?: string }) => {
       if (!a.path.startsWith('/')) throw new ToolError('path must be absolute');
-      const r = resolveRoom(a.room);
+      const r = writableRoom(a.room);
       const file: { path: string; name?: string; caption?: string } = { path: a.path };
       if (a.name) file.name = a.name;
       if (a.caption) file.caption = a.caption;

@@ -4,6 +4,11 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-01
+
+### Added
+- `MATRIX_SEND_SCOPE=dm`: the write tools (`send_message`, `react`, `edit_message`, `redact_message`, `send_file`) refuse every room that is not a direct message, and say so in their descriptions.
+
 ## [0.3.0] - 2026-11-01
 
 ### Added

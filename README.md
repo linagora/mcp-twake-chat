@@ -109,6 +109,7 @@ The server never logs in by itself: it needs a Matrix access token **and the dev
 | `MATRIX_STORE_KEY_FILE` | Key encrypting the store (created on first start, `0600`) | `<store dir>/store.key` |
 | `MATRIX_DRAFTS_ROOM_NAME` | Name of the private drafts room | `Drafts` |
 | `MATRIX_DOWNLOAD_DIR` | Default directory of `download_attachment` | `~/Downloads/twake-chat` |
+| `MATRIX_SEND_SCOPE` | `dm` restricts the write tools (`send_message`, `react`, `edit_message`, `redact_message`, `send_file`) to direct messages: group rooms are refused | `all` |
 | `MATRIX_SEARCH_INDEX` | `off` disables the local search index (encrypted rooms are then not searchable) | `on` |
 | `MATRIX_SEARCH_BACKFILL_DAYS` | History indexed in the background, in days (`0` = only new messages) | `365` |
 | `MCP_TRANSPORT` | `stdio` or `http` | `stdio` |
@@ -149,7 +150,7 @@ Do not configure the same device in two clients at once in stdio mode: the secon
 
 ## Recommended safe configuration
 
-- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK.
+- For an assistant that acts on its own, keep it to **drafts only**: exclude `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` in your MCP client (example above) and let the user send from Twake Chat. Otherwise, ask the assistant to show the exact message and room and wait for your OK, and consider `MATRIX_SEND_SCOPE=dm` so that it can never post in a group room.
 - Chat messages are written by other people, possibly from other servers through federation: treat them as untrusted input (prompt injection). The tool descriptions say so to the model.
 - The access token gives access to your whole history once the recovery key is fetched from the ToM vault: protect the broker's files (`0600`), never log tokens, and revoke the device from Twake Chat's session list if in doubt.
 - Keep the HTTP transport on loopback with a bearer token.

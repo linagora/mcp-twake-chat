@@ -262,6 +262,32 @@ describe('write tools (v0.2)', () => {
   });
 });
 
+describe('MATRIX_SEND_SCOPE=dm', () => {
+  it('refuses to write in group rooms but allows direct messages', async () => {
+    const server = new McpServer({ name: 't', version: '0' });
+    const c2 = new FakeChat();
+    registerTools(server, c2, directory, { timeZone: 'Europe/Paris', sendScope: 'dm' });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const cl = new Client({ name: 'c', version: '0' });
+    await cl.connect(ct);
+    const call2 = async (name: string, args: Record<string, unknown>) => cl.callTool({ name, arguments: args });
+    const group = await call2('send_message', { room: '!t:x', text: 'hello' });
+    expect(group.isError).toBe(true);
+    expect((group.content as { text: string }[])[0].text).toMatch(/direct messages only/);
+    for (const [name, args] of [
+      ['react', { room: '!t:x', event_id: '$m', emoji: '👍' }],
+      ['edit_message', { room: '!t:x', event_id: '$m', text: 'x' }],
+      ['redact_message', { room: '!t:x', event_id: '$m' }],
+      ['send_file', { room: '!t:x', path: '/tmp/a.pdf' }],
+    ] as const) expect((await call2(name, args)).isError).toBe(true);
+    expect((await call2('send_message', { room: '!dm:x', text: 'hello' })).isError).toBeFalsy();
+    expect(c2.writes).toEqual([['send', '!dm:x', 'hello', {}]]);
+    const tools = (await cl.listTools()).tools;
+    expect(tools.find((x) => x.name === 'send_message')?.description).toMatch(/direct messages only/);
+  });
+});
+
 describe('v0.3: search and rooms', () => {
   it('searches messages with room, sender and date filters and reports the index coverage', async () => {
     const r = (await call('search_messages', { query: 'contrat signé', room: 'équipe', from: '@bob:x', since: '2026-10-01', until: '2026-11-01', limit: 5 })).data;
