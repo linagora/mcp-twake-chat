@@ -4,6 +4,16 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-01
+
+### Added
+- Prior approval of every action in the user's name, asked by the server itself through MCP elicitation (`MATRIX_APPROVAL=elicit`, the default): `send_message`, `react`, `edit_message`, `redact_message`, `send_file`, `join_room`, `leave_room`, `create_room` and `invite_user` show the room (direct message, group room or space, members, encryption), the quoted message they answer or change, the exact text, file or invitees and a unique reference, and act only on accept. Prompts in English or French (`USER_LANGUAGE`), `MATRIX_APPROVAL_TIMEOUT_MS`. Reads, searches, downloads and drafts need no approval.
+- HTTP sessions (`Mcp-Session-Id`): the approval prompt sent during a tool call reaches the right client and its answer comes back. Requests without a session are still served statelessly.
+- `scripts/live-write.mjs` answers the approval prompts and checks that a refused message is not sent.
+
+### Changed
+- **Breaking**: with an MCP client that does not support elicitation, write tools now return an error and send nothing. Set `MATRIX_APPROVAL=client` to keep the 0.4 behaviour when your client confirms writes itself.
+
 ## [0.4.0] - 2026-11-01
 
 ### Added

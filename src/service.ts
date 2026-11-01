@@ -96,6 +96,9 @@ export interface ChatService {
   /** Post a draft in the private drafts room; never in the target room. */
   postDraft(text: string, target?: RoomView): Promise<{ roomId: string; roomName: string; eventId: string }>;
 
+  /** One message, decrypted (for the approval prompt that quotes it); undefined if it cannot be read. */
+  message(roomId: string, eventId: string): Promise<MessageView | undefined>;
+
   // ---- write tools (v0.2): they act in the user's name, visible to the room members
   sendMessage(roomId: string, text: string, opts: { replyTo?: string; threadRoot?: string; mentions?: string[] }): Promise<{ eventId: string }>;
   react(roomId: string, eventId: string, key: string): Promise<{ eventId: string }>;

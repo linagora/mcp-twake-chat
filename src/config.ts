@@ -28,6 +28,8 @@ export interface Config {
   downloadDir: string;
   /** Where write tools may act: everywhere, or direct messages only */
   sendScope: 'all' | 'dm';
+  /** Prior approval of every write: elicit = the server asks the user (MCP elicitation); client = the MCP client confirms. */
+  approval: { mode: 'elicit' | 'client'; language: 'en' | 'fr'; timeoutMs: number };
   /** Local full-text index of readable messages (encrypted rooms included) */
   search: { enabled: boolean; file: string; backfillDays: number };
   transport: TransportConfig;
@@ -112,6 +114,7 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     downloadDir: expand(env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
     search: searchConfig(env, storeDir),
     sendScope: sendScopeOf(env.MATRIX_SEND_SCOPE),
+    approval: approvalOf(env),
     transport,
     timeZone: env.USER_TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     timeoutMs: Number(env.MATRIX_TIMEOUT_MS ?? 30000),
@@ -130,4 +133,12 @@ function sendScopeOf(v: string | undefined): Config['sendScope'] {
   const scope = (v ?? 'all').toLowerCase();
   if (scope !== 'all' && scope !== 'dm') throw new Error('MATRIX_SEND_SCOPE must be all or dm');
   return scope;
+}
+
+function approvalOf(env: NodeJS.ProcessEnv): Config['approval'] {
+  const mode = (env.MATRIX_APPROVAL ?? 'elicit').toLowerCase();
+  if (mode !== 'elicit' && mode !== 'client') throw new Error('MATRIX_APPROVAL must be elicit or client');
+  const timeoutMs = Number(env.MATRIX_APPROVAL_TIMEOUT_MS ?? 600000);
+  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) throw new Error('MATRIX_APPROVAL_TIMEOUT_MS must be a number of milliseconds');
+  return { mode, language: (env.USER_LANGUAGE ?? '').toLowerCase().startsWith('fr') ? 'fr' : 'en', timeoutMs };
 }
