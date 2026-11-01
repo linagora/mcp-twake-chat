@@ -26,6 +26,8 @@ export interface Config {
   draftsRoomName: string;
   /** Default directory for download_attachment */
   downloadDir: string;
+  /** Local full-text index of readable messages (encrypted rooms included) */
+  search: { enabled: boolean; file: string; backfillDays: number };
   transport: TransportConfig;
   timeZone: string;
   timeoutMs: number;
@@ -106,8 +108,17 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     storeKeyFile: expand(env.MATRIX_STORE_KEY_FILE ?? join(storeDir, 'store.key')),
     draftsRoomName: env.MATRIX_DRAFTS_ROOM_NAME ?? 'Drafts',
     downloadDir: expand(env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
+    search: searchConfig(env, storeDir),
     transport,
     timeZone: env.USER_TIMEZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     timeoutMs: Number(env.MATRIX_TIMEOUT_MS ?? 30000),
   };
+}
+
+function searchConfig(env: NodeJS.ProcessEnv, storeDir: string): Config['search'] {
+  const flag = (env.MATRIX_SEARCH_INDEX ?? 'on').toLowerCase();
+  if (!['on', 'off', 'true', 'false'].includes(flag)) throw new Error('MATRIX_SEARCH_INDEX must be on or off');
+  const days = Number(env.MATRIX_SEARCH_BACKFILL_DAYS ?? 365);
+  if (!Number.isInteger(days) || days < 0) throw new Error('MATRIX_SEARCH_BACKFILL_DAYS must be a number of days (0 = only new messages)');
+  return { enabled: flag === 'on' || flag === 'true', file: join(storeDir, 'search.db'), backfillDays: days };
 }

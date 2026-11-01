@@ -15,7 +15,8 @@ import { guessMime, parseMxc, safeName, uniquePath } from './files.js';
 import type { Config } from './config.js';
 import type { Endpoints } from './discovery.js';
 import { applyEdits, messageFromEvent, type MessageView, type RawEvent, type RoomView } from './format.js';
-import type { ChatService, EncryptionStatus, Identity, Member, MentionHit, MessageQuery, Page, UnreadRoom } from './service.js';
+import { SearchIndex, type SearchHit } from './search-index.js';
+import type { ChatService, EncryptionStatus, Identity, Invitation, Member, MentionHit, MessageQuery, NewRoom, Page, SearchRequest, SearchResult, UnreadRoom } from './service.js';
 import { acquireStoreLock, loadOrCreateStoreKey } from './store.js';
 import type { TomClient } from './tom.js';
 import type { TokenSource } from './token.js';
@@ -65,6 +66,9 @@ export class MatrixChat implements ChatService {
   private myNames: string[] = [];
   private bootstrap: { imported?: number } = {};
   private refreshTimer?: NodeJS.Timeout;
+  private index?: SearchIndex;
+  private backfilling = false;
+  private stopped = false;
 
   private constructor(
     private readonly sdk: Sdk,
@@ -133,6 +137,7 @@ export class MatrixChat implements ChatService {
           .catch((e: Error) => log('warn', `encryption bootstrap incomplete: ${e.message} (older encrypted messages may stay unreadable)`));
       }
       await chat.loadMyNames();
+      chat.startIndex();
       log('info', `connected as ${config.userId} (device ${session.deviceId}), ${chat.rooms().length} rooms`);
       return chat;
     } catch (e) {
@@ -209,10 +214,240 @@ export class MatrixChat implements ChatService {
   }
 
   async close(): Promise<void> {
+    this.stopped = true;
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.client.stopClient();
     await new Promise((r) => setTimeout(r, 1500)); // let IndexedDB flush
+    this.index?.close();
     this.lock.release();
+  }
+
+  // ---------------------------------------------------------------- local search index
+
+  /** Index live messages of encrypted rooms, then catch up and backfill their history in the background. */
+  private startIndex(): void {
+    const s = this.opts.config.search;
+    if (!s.enabled) return;
+    this.index = SearchIndex.open(s.file);
+    const { RoomEvent, MatrixEventEvent } = this.sdk;
+    this.client.on(RoomEvent.Timeline, (ev: Any, room: Any, toStart: boolean, _removed: boolean, data: Any) => {
+      if (toStart || !data?.liveEvent || !room) return;
+      this.indexLive(room.roomId, ev);
+    });
+    this.client.on(MatrixEventEvent.Decrypted, (ev: Any) => {
+      const roomId = ev.getRoomId();
+      if (roomId) this.indexLive(roomId, ev);
+    });
+    this.client.on(RoomEvent.Redaction, (ev: Any) => {
+      const id = ev.event?.redacts ?? ev.getContent()?.redacts;
+      if (id) this.index?.remove(id);
+    });
+    const cutoff = s.backfillDays > 0 ? Date.now() - s.backfillDays * 86400000 : Infinity;
+    this.backfill(cutoff).catch((e: Error) => this.opts.log('warn', `search backfill stopped: ${e.message}`));
+  }
+
+  private isEncrypted(roomId: string): boolean {
+    return Boolean(this.client.getRoom(roomId)?.hasEncryptionStateEvent());
+  }
+
+  private viewOf(roomId: string, e: Any): MessageView {
+    const ctx = { names: (id: string) => this.names.get(id) ?? this.client.getRoom(roomId)?.getMember(id)?.name ?? id, me: this.opts.config.userId, myNames: this.myNames };
+    const raw: RawEvent = {
+      event_id: e.getId(),
+      sender: e.getSender(),
+      type: e.getType(),
+      origin_server_ts: e.getTs(),
+      content: e.getContent() ?? {},
+      unsigned: e.getUnsigned(),
+    };
+    return messageFromEvent(raw, e.isDecryptionFailure() ? { ...ctx, undecryptable: e.decryptionFailureReason ?? 'UNKNOWN' } : ctx);
+  }
+
+  private indexLive(roomId: string, ev: Any): void {
+    if (!this.index || !this.isEncrypted(roomId)) return;
+    if (ev.getType() === 'm.room.encrypted' || ev.isDecryptionFailure?.() || !MESSAGE_TYPES.has(ev.getType())) return; // indexed once decrypted
+    try {
+      this.index.add(roomId, [this.viewOf(roomId, ev)]);
+    } catch (e) {
+      this.opts.log('warn', `search index: ${(e as Error).message}`);
+    }
+  }
+
+  /** Per encrypted room, newest first: catch up on messages missed while stopped, then go back in history to `cutoff`. */
+  private async backfill(cutoff: number): Promise<void> {
+    const index = this.index!;
+    this.backfilling = true;
+    const pause = () => new Promise((r) => setTimeout(r, 250));
+    try {
+      const rooms = this.rooms()
+        .filter((r) => r.encrypted && r.kind !== 'space')
+        .sort((a, b) => b.lastActivity - a.lastActivity);
+      for (const room of rooms) {
+        const newest = index.newestTs(room.id);
+        if (newest !== undefined && room.lastActivity > newest) {
+          let from: string | null = null;
+          for (let page = 0; page < 50 && !this.stopped; page++) {
+            const res: Any = await this.client.createMessagesRequest(room.id, from, 100, this.sdk.Direction.Backward);
+            const chunk = res.chunk as Any[];
+            const fresh = chunk.filter((e) => MESSAGE_TYPES.has(e.type) && e.origin_server_ts >= newest);
+            if (fresh.length) index.add(room.id, await this.views(room.id, fresh));
+            if (!res.end || chunk.length === 0 || chunk.some((e) => e.origin_server_ts < newest)) break;
+            from = res.end;
+            await pause();
+          }
+        }
+        let p = index.progress(room.id);
+        if (cutoff === Infinity && newest === undefined) {
+          index.setProgress(room.id, { token: null, complete: true });
+          continue;
+        }
+        for (let page = 0; !p.complete && page < 500 && !this.stopped; page++) {
+          const res = await this.client.createMessagesRequest(room.id, p.token, 100, this.sdk.Direction.Backward);
+          const chunk = res.chunk as Any[];
+          const msgs = chunk.filter((e) => MESSAGE_TYPES.has(e.type) && e.origin_server_ts >= cutoff);
+          if (msgs.length) index.add(room.id, await this.views(room.id, msgs));
+          const oldestTs: number | undefined = chunk.length ? chunk[chunk.length - 1].origin_server_ts : p.oldestTs;
+          p = { token: res.end ?? null, complete: !res.end || chunk.length === 0 || (oldestTs !== undefined && oldestTs < cutoff), oldestTs };
+          index.setProgress(room.id, p);
+          await pause();
+        }
+        if (this.stopped) return;
+      }
+      const st = index.stats();
+      this.opts.log('info', `search index ready: ${st.messages} messages`);
+    } finally {
+      this.backfilling = false;
+    }
+  }
+
+  async searchMessages(q: SearchRequest): Promise<SearchResult> {
+    const all = this.rooms().filter((r) => r.kind !== 'space');
+    const names = new Map(all.map((r) => [r.id, r.name]));
+    const scope = q.roomIds ? all.filter((r) => q.roomIds!.includes(r.id)) : all;
+    const enc = scope.filter((r) => r.encrypted).map((r) => r.id);
+    const clear = scope.filter((r) => !r.encrypted).map((r) => r.id);
+
+    let local: SearchHit[] = [];
+    if (this.index && enc.length) {
+      const found = this.index.search({ ...q, roomIds: enc, limit: q.limit + 10 });
+      // drop messages deleted since they were indexed (deletions are not seen while the server is stopped)
+      const alive = await mapLimit(found, 6, async (h) => {
+        const ev = await this.client.fetchRoomEvent(h.roomId, h.id).catch(() => undefined);
+        const gone = !ev || ev.unsigned?.redacted_because || Object.keys(ev.content ?? {}).length === 0;
+        if (gone) this.index?.remove(h.id);
+        return gone ? undefined : h;
+      });
+      local = alive.filter((h): h is SearchHit => Boolean(h));
+    }
+
+    let server: SearchHit[] = [];
+    if (clear.length) {
+      const filter: Record<string, unknown> = { rooms: clear, limit: q.limit };
+      if (q.sender) filter.senders = [q.sender];
+      const res = await this.client.search({ body: { search_categories: { room_events: { search_term: q.text, order_by: 'recent', filter } } } });
+      const raws = ((res.search_categories?.room_events?.results ?? []) as Any[]).map((r) => r.result).filter((e) => e && MESSAGE_TYPES.has(e.type));
+      const inRange = raws.filter((e) => (q.since === undefined || e.origin_server_ts >= q.since) && (q.until === undefined || e.origin_server_ts < q.until));
+      for (const e of inRange) {
+        const [v] = await this.views(e.room_id, [e]);
+        if (!v.body || v.kind === 'deleted') continue;
+        const hit: SearchHit = { id: v.id, roomId: e.room_id, sender: v.sender, senderName: v.senderName, ts: v.ts, body: v.body };
+        if (v.threadRoot) hit.threadRoot = v.threadRoot;
+        server.push(hit);
+      }
+    }
+
+    const seen = new Set<string>();
+    const hits = [...local, ...server]
+      .filter((h) => !seen.has(h.id) && seen.add(h.id))
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, q.limit)
+      .map((h) => ({ ...h, roomName: names.get(h.roomId) ?? h.roomId }));
+    const out: SearchResult = { hits, serverRooms: clear.length };
+    if (this.index) {
+      const encAll = all.filter((r) => r.encrypted);
+      out.index = {
+        messages: this.index.stats().messages,
+        rooms: encAll.length,
+        completeRooms: encAll.filter((r) => this.index!.progress(r.id).complete).length,
+        backfilling: this.backfilling,
+      };
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- rooms
+
+  invitations(): Invitation[] {
+    const me = this.opts.config.userId;
+    return this.client
+      .getRooms()
+      .filter((r: Any) => r.getMyMembership() === 'invite')
+      .map((r: Any): Invitation => {
+        const ev = r.getMember(me)?.events?.member;
+        const inv: Invitation = { roomId: r.roomId, name: r.name, direct: Boolean(ev?.getContent()?.is_direct) };
+        const inviter: string | undefined = ev?.getSender();
+        if (inviter) {
+          inv.inviter = inviter;
+          const n = r.getMember(inviter)?.name;
+          if (n && n !== inviter) inv.inviterName = n;
+        }
+        if (ev?.getTs()) inv.ts = ev.getTs();
+        return inv;
+      });
+  }
+
+  private async addDirect(userId: string, roomId: string): Promise<void> {
+    const content = { ...(this.client.getAccountData('m.direct')?.getContent() ?? {}) } as Record<string, string[]>;
+    const list = new Set(content[userId] ?? []);
+    if (list.has(roomId)) return;
+    list.add(roomId);
+    content[userId] = [...list];
+    await this.client.setAccountData('m.direct', content);
+  }
+
+  private async waitRoom(roomId: string, membership: string, ready: (room: Any) => boolean = () => true): Promise<Any> {
+    for (let i = 0; i < 80; i++) {
+      const r = this.client.getRoom(roomId);
+      if (r && r.getMyMembership() === membership && ready(r)) return r;
+      await new Promise((res) => setTimeout(res, 250));
+    }
+    return undefined;
+  }
+
+  async joinRoom(idOrAlias: string): Promise<{ roomId: string; name: string }> {
+    const invite = this.invitations().find((i) => i.roomId === idOrAlias);
+    const joined = await this.client.joinRoom(idOrAlias);
+    const room = await this.waitRoom(joined.roomId, 'join');
+    if (invite?.direct && invite.inviter) await this.addDirect(invite.inviter, joined.roomId);
+    return { roomId: joined.roomId, name: room?.name ?? invite?.name ?? joined.roomId };
+  }
+
+  async leaveRoom(roomId: string): Promise<void> {
+    this.joined(roomId);
+    await this.client.leave(roomId);
+  }
+
+  async createRoom(r: NewRoom): Promise<{ roomId: string }> {
+    const opts: Record<string, unknown> = {
+      preset: r.direct ? this.sdk.Preset.TrustedPrivateChat : this.sdk.Preset.PrivateChat,
+      visibility: this.sdk.Visibility.Private,
+      invite: r.invite,
+      is_direct: r.direct,
+      initial_state: r.encrypted ? [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }] : [],
+    };
+    if (r.name) opts.name = r.name;
+    if (r.topic) opts.topic = r.topic;
+    const res = await this.client.createRoom(opts);
+    if (r.direct && r.invite[0]) await this.addDirect(r.invite[0], res.room_id);
+    // a message sent before the client knows the room is encrypted would go out in clear
+    const room = await this.waitRoom(res.room_id, 'join', (x) => !r.encrypted || x.hasEncryptionStateEvent());
+    if (!room) throw new Error(`room ${res.room_id} was created but is not synced yet: wait a few seconds before posting in it`);
+    return { roomId: res.room_id };
+  }
+
+  async invite(roomId: string, userId: string): Promise<void> {
+    this.joined(roomId);
+    await this.client.invite(roomId, userId);
   }
 
   // ---------------------------------------------------------------- ChatService
@@ -331,18 +566,15 @@ export class MatrixChat implements ChatService {
       await Promise.all(retry.map((e: Any) => e.attemptDecryption(this.client.getCrypto(), { isRetry: true })));
     }
     for (const e of events) await this.nameOf(roomId, e.getSender());
-    const ctx = { names: (id: string) => this.names.get(id) ?? this.client.getRoom(roomId)?.getMember(id)?.name ?? id, me: this.opts.config.userId, myNames: this.myNames };
-    return events.map((e: Any) => {
-      const raw: RawEvent = {
-        event_id: e.getId(),
-        sender: e.getSender(),
-        type: e.getType(),
-        origin_server_ts: e.getTs(),
-        content: e.getContent() ?? {},
-        unsigned: e.getUnsigned(),
-      };
-      return messageFromEvent(raw, e.isDecryptionFailure() ? { ...ctx, undecryptable: e.decryptionFailureReason ?? 'UNKNOWN' } : ctx);
-    });
+    const out = events.map((e: Any) => this.viewOf(roomId, e));
+    if (this.index && this.isEncrypted(roomId)) {
+      try {
+        this.index.add(roomId, out); // whatever is read gets indexed
+      } catch (e) {
+        this.opts.log('warn', `search index: ${(e as Error).message}`);
+      }
+    }
+    return out;
   }
 
   async messages(roomId: string, q: MessageQuery): Promise<Page> {

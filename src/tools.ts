@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { formatTime, matchRooms, type MessageView, type RoomView } from './format.js';
-import type { ChatService, Directory } from './service.js';
+import type { ChatService, Directory, NewRoom, SearchRequest } from './service.js';
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const DRAFT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
@@ -426,6 +426,151 @@ export function registerTools(server: McpServer, chat: ChatService, directory: D
       const r = resolveRoom(a.room);
       const f = await chat.downloadAttachment(r.id, a.event_id, dir);
       return { room: { room_id: r.id, name: r.name }, path: f.path, name: f.name, mimetype: f.mimetype, size: f.size };
+    }),
+  );
+
+  // ------------------------------------------------------------------ v0.3: search and rooms
+
+  const userIdArg = z.string().regex(/^@[^:\s]+:\S+$/, 'a Matrix user id such as @alice:example.com');
+
+  server.registerTool(
+    'search_messages',
+    {
+      title: 'Search messages',
+      description:
+        'Full-text search in the messages of your rooms and direct messages, encrypted ones included (accents and case ignored, every word must appear, word beginnings match). Newest first. ' +
+        UNTRUSTED,
+      inputSchema: {
+        query: z.string().describe('Words to find.'),
+        room: roomArg.optional().describe('Limit to one room (same forms as the room argument of other tools).'),
+        from: userIdArg.optional().describe('Only messages sent by this Matrix user id.'),
+        since: z.string().optional().describe('Only messages at or after this date (YYYY-MM-DD or YYYY-MM-DDTHH:mm, user time zone).'),
+        until: z.string().optional().describe('Only messages before this date.'),
+        limit: z.number().int().min(1).max(100).optional().describe('Default 20.'),
+      },
+      annotations: READ,
+    },
+    wrap(async (a: { query: string; room?: string; from?: string; since?: string; until?: string; limit?: number }) => {
+      if (!/[\p{L}\p{N}]/u.test(a.query)) throw new ToolError('query must contain at least one word');
+      const q: SearchRequest = { text: a.query, limit: a.limit ?? 20 };
+      if (a.room) q.roomIds = [resolveRoom(a.room).id];
+      if (a.from) q.sender = a.from;
+      if (a.since) q.since = parseWhen(a.since, tz);
+      if (a.until) q.until = parseWhen(a.until, tz);
+      const r = await chat.searchMessages(q);
+      const coverage = r.index
+        ? `Encrypted rooms: local index of ${r.index.messages} messages, history fully indexed in ${r.index.completeRooms}/${r.index.rooms} rooms` +
+          (r.index.backfilling ? ' (still indexing older messages: results may be incomplete)' : '') +
+          `. Unencrypted rooms searched on the server: ${r.serverRooms}.`
+        : `Local index disabled (MATRIX_SEARCH_INDEX=off): only unencrypted rooms were searched (${r.serverRooms}).`;
+      return {
+        results: r.hits.map((h) => ({
+          room: { room_id: h.roomId, name: h.roomName },
+          id: h.id,
+          time: time(h.ts),
+          from: h.senderName,
+          from_id: h.sender,
+          text: h.body.length > 600 ? `${h.body.slice(0, 600)}…` : h.body,
+          thread: h.threadRoot,
+        })),
+        coverage,
+      };
+    }),
+  );
+
+  server.registerTool(
+    'list_invitations',
+    {
+      title: 'List pending invitations',
+      description: 'Rooms and direct messages you have been invited to and not joined yet.',
+      inputSchema: {},
+      annotations: READ,
+    },
+    wrap(async () => ({
+      invitations: chat.invitations().map((i) => ({
+        room_id: i.roomId,
+        name: i.name,
+        direct: i.direct,
+        invited_by: i.inviterName ?? i.inviter,
+        invited_by_id: i.inviter,
+        time: i.ts ? time(i.ts) : undefined,
+      })),
+    })),
+  );
+
+  server.registerTool(
+    'join_room',
+    {
+      title: 'Join a room',
+      description: `Accept a pending invitation (by room id or name, see list_invitations) or join a public room by id or alias (#room:server). ${IN_NAME}`,
+      inputSchema: { room: z.string().describe('Invitation room id or name, or a room alias #…:server / id !…:server.') },
+      annotations: SEND,
+    },
+    wrap(async (a: { room: string }) => {
+      let target = a.room.trim();
+      if (!/^[!#]/.test(target)) {
+        const invites = chat.invitations().map((i) => ({ id: i.roomId, name: i.name, kind: 'group' as const, encrypted: false, members: 0, unread: false, notifications: 0, highlights: 0, lastActivity: i.ts ?? 0 }));
+        const hits = matchRooms(invites, target);
+        if (hits.length === 0) throw new ToolError(`No pending invitation matches "${a.room}". Use list_invitations, or pass a room alias (#…) or id (!…).`);
+        if (hits.length > 1) throw new ToolError(`${hits.length} invitations match "${a.room}": ${hits.map((h) => `${h.name} (${h.id})`).join(', ')}. Pass the room_id.`);
+        target = hits[0].id;
+      }
+      const r = await chat.joinRoom(target);
+      return { room_id: r.roomId, name: r.name, joined: true };
+    }),
+  );
+
+  server.registerTool(
+    'leave_room',
+    {
+      title: 'Leave a room',
+      description: `Leave a room or direct message. In a private room you need a new invitation to come back. ${IN_NAME}`,
+      inputSchema: { room: roomArg },
+      annotations: DESTRUCTIVE,
+    },
+    wrap(async (a: { room: string }) => {
+      const r = resolveRoom(a.room);
+      await chat.leaveRoom(r.id);
+      return { room_id: r.id, name: r.name, left: true };
+    }),
+  );
+
+  server.registerTool(
+    'create_room',
+    {
+      title: 'Create a room',
+      description: `Create a private room (end-to-end encrypted by default) and invite people, or open a direct message with direct_with. Invitations are sent in the user's name. ${IN_NAME}`,
+      inputSchema: {
+        name: z.string().min(1).optional().describe('Room name (not needed for a direct message).'),
+        topic: z.string().optional(),
+        invite: z.array(userIdArg).optional().describe('Matrix user ids to invite (find them with search_users).'),
+        direct_with: userIdArg.optional().describe('Open a direct message with this user instead of a named room.'),
+        encrypted: z.boolean().optional().describe('Default true.'),
+      },
+      annotations: SEND,
+    },
+    wrap(async (a: { name?: string; topic?: string; invite?: string[]; direct_with?: string; encrypted?: boolean }) => {
+      if (!a.name && !a.direct_with) throw new ToolError('Give a name, or direct_with for a direct message.');
+      const r: NewRoom = { invite: a.direct_with ? [a.direct_with, ...(a.invite ?? []).filter((u) => u !== a.direct_with)] : (a.invite ?? []), encrypted: a.encrypted ?? true, direct: Boolean(a.direct_with) };
+      if (a.name) r.name = a.name;
+      if (a.topic) r.topic = a.topic;
+      const res = await chat.createRoom(r);
+      return { room_id: res.roomId, name: a.name, invited: r.invite, encrypted: r.encrypted, direct: r.direct };
+    }),
+  );
+
+  server.registerTool(
+    'invite_user',
+    {
+      title: 'Invite someone to a room',
+      description: `Invite a user to a room you belong to (they receive the invitation from you). ${IN_NAME}`,
+      inputSchema: { room: roomArg, user_id: userIdArg.describe('Matrix user id (find it with search_users).') },
+      annotations: SEND,
+    },
+    wrap(async (a: { room: string; user_id: string }) => {
+      const r = resolveRoom(a.room);
+      await chat.invite(r.id, a.user_id);
+      return { room_id: r.id, name: r.name, invited: a.user_id };
     }),
   );
 }

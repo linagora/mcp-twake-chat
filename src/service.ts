@@ -1,4 +1,5 @@
 import type { MessageView, RoomView } from './format.js';
+import type { SearchHit } from './search-index.js';
 import type { DirectoryUser } from './tom.js';
 
 export interface Member {
@@ -32,6 +33,40 @@ export interface UnreadRoom {
 export interface MentionHit {
   room: RoomView;
   message: MessageView;
+}
+
+export interface SearchRequest {
+  text: string;
+  roomIds?: string[];
+  sender?: string;
+  since?: number;
+  until?: number;
+  limit: number;
+}
+
+export interface SearchResult {
+  hits: (SearchHit & { roomName: string })[];
+  /** local index of encrypted rooms; absent when disabled */
+  index?: { messages: number; rooms: number; completeRooms: number; backfilling: boolean };
+  /** unencrypted rooms searched on the server */
+  serverRooms: number;
+}
+
+export interface Invitation {
+  roomId: string;
+  name: string;
+  inviter?: string;
+  inviterName?: string;
+  ts?: number;
+  direct: boolean;
+}
+
+export interface NewRoom {
+  name?: string;
+  topic?: string;
+  invite: string[];
+  encrypted: boolean;
+  direct: boolean;
 }
 
 export interface Identity {
@@ -69,6 +104,16 @@ export interface ChatService {
   /** Only the user's own messages. */
   redactMessage(roomId: string, eventId: string, reason?: string): Promise<{ eventId: string }>;
   sendFile(roomId: string, file: { path: string; name?: string; caption?: string }): Promise<{ eventId: string; name: string; size: number; encrypted: boolean }>;
+  // ---- v0.3
+  /** Full-text search: local index (encrypted rooms) + server search (unencrypted rooms). */
+  searchMessages(q: SearchRequest): Promise<SearchResult>;
+  invitations(): Invitation[];
+  /** Accept an invitation or join a public room (id or alias). */
+  joinRoom(idOrAlias: string): Promise<{ roomId: string; name: string }>;
+  leaveRoom(roomId: string): Promise<void>;
+  createRoom(r: NewRoom): Promise<{ roomId: string }>;
+  invite(roomId: string, userId: string): Promise<void>;
+
   /** Download (and decrypt) the attachment of a message into a local directory. */
   downloadAttachment(roomId: string, eventId: string, dir: string): Promise<{ path: string; name: string; mimetype?: string; size: number }>;
 }

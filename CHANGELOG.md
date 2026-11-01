@@ -4,6 +4,19 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-01
+
+### Added
+- `search_messages`: full-text search in every room, end-to-end encrypted ones included, through a local SQLite FTS5 index of decrypted messages (live indexing, background backfill of `MATRIX_SEARCH_BACKFILL_DAYS`, catch-up after a restart, deleted messages dropped) combined with the homeserver search for unencrypted rooms. `MATRIX_SEARCH_INDEX=off` disables the index.
+- `list_invitations`; room management acting in the user's name: `create_room` (private, encrypted by default, or a direct message), `invite_user`, `join_room`, `leave_room`.
+
+### Changed
+- Node.js >= 22.13 (built-in `node:sqlite`).
+- TypeScript 7, actions/checkout and actions/setup-node v7.
+
+### Fixed
+- `create_room` returns only once the client knows the new room is encrypted, so a message posted right after it is never sent in clear.
+
 ## [0.2.0] - 2026-11-01
 
 ### Added

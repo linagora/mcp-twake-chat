@@ -3,7 +3,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { registerTools, parseWhen } from '../src/tools.js';
-import type { ChatService, Directory, MessageQuery } from '../src/service.js';
+import type { ChatService, Directory, MessageQuery, NewRoom, SearchRequest } from '../src/service.js';
 import type { MessageView, RoomView } from '../src/format.js';
 
 const T = (h: number, m = 0) => Date.UTC(2026, 10, 1, h, m);
@@ -71,6 +71,32 @@ class FakeChat implements ChatService {
     this.writes.push(['file', roomId, file]);
     return { eventId: '$f1', name: 'report.pdf', size: 1234, encrypted: true };
   }
+  searches: SearchRequest[] = [];
+  async searchMessages(q: SearchRequest) {
+    this.searches.push(q);
+    return {
+      hits: [{ id: '$h1', roomId: '!t:x', roomName: 'Équipe Twake', sender: '@bob:x', senderName: 'Bob', ts: T(6, 30), body: 'le contrat est signé', threadRoot: '$root' }],
+      index: { messages: 1200, rooms: 40, completeRooms: 12, backfilling: true },
+      serverRooms: 1,
+    };
+  }
+  invitations() {
+    return [{ roomId: '!inv:x', name: 'Projet Atlas', inviter: '@bob:x', inviterName: 'Bob DURAND', ts: T(5), direct: false }];
+  }
+  async joinRoom(idOrAlias: string) {
+    this.writes.push(['join', idOrAlias]);
+    return { roomId: '!inv:x', name: 'Projet Atlas' };
+  }
+  async leaveRoom(roomId: string) {
+    this.writes.push(['leave', roomId]);
+  }
+  async createRoom(r: NewRoom) {
+    this.writes.push(['create', r]);
+    return { roomId: '!new:x' };
+  }
+  async invite(roomId: string, userId: string) {
+    this.writes.push(['invite', roomId, userId]);
+  }
   async downloadAttachment(roomId: string, eventId: string, dir: string) {
     this.writes.push(['download', roomId, eventId, dir]);
     return { path: `${dir}/report.pdf`, name: 'report.pdf', mimetype: 'application/pdf', size: 1234 };
@@ -108,9 +134,9 @@ describe('tool catalogue', () => {
   it('exposes read tools as read-only and the draft tool as closed-world', async () => {
     const { tools } = await client.listTools();
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
-    const WRITE = ['send_message', 'react', 'edit_message', 'redact_message', 'send_file'];
+    const WRITE = ['send_message', 'react', 'edit_message', 'redact_message', 'send_file', 'join_room', 'leave_room', 'create_room', 'invite_user'];
     expect(Object.keys(by).sort()).toEqual(
-      ['create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_room_members', 'list_rooms', 'search_users', 'whoami', ...WRITE].sort(),
+      ['create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_invitations', 'list_room_members', 'list_rooms', 'search_messages', 'search_users', 'whoami', ...WRITE].sort(),
     );
     for (const name of Object.keys(by).filter((n) => n !== 'create_draft' && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
     expect(by.create_draft.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
@@ -119,6 +145,7 @@ describe('tool catalogue', () => {
       expect(by[name].description).toMatch(/in the user's name/);
     }
     expect(by.redact_message.annotations?.destructiveHint).toBe(true);
+    expect(by.leave_room.annotations?.destructiveHint).toBe(true);
     expect(by.send_message.annotations?.destructiveHint).toBe(false);
     expect(by.get_messages.description).toMatch(/untrusted|instructions/i);
   });
@@ -232,6 +259,42 @@ describe('write tools (v0.2)', () => {
     await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: '/srv/in' });
     expect(chat.writes.at(-1)).toEqual(['download', '!t:x', '$m', '/srv/in']);
     expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: 'rel' })).isError).toBe(true);
+  });
+});
+
+describe('v0.3: search and rooms', () => {
+  it('searches messages with room, sender and date filters and reports the index coverage', async () => {
+    const r = (await call('search_messages', { query: 'contrat signé', room: 'équipe', from: '@bob:x', since: '2026-10-01', until: '2026-11-01', limit: 5 })).data;
+    expect(chat.searches[0]).toEqual({ text: 'contrat signé', roomIds: ['!t:x'], sender: '@bob:x', since: parseWhen('2026-10-01', 'Europe/Paris'), until: parseWhen('2026-11-01', 'Europe/Paris'), limit: 5 });
+    expect(r.results[0]).toMatchObject({ room: { room_id: '!t:x', name: 'Équipe Twake' }, id: '$h1', from: 'Bob', from_id: '@bob:x', text: 'le contrat est signé', thread: '$root' });
+    expect(r.results[0].time).toMatch(/2026-11-01/);
+    expect(r.coverage).toMatch(/12\/40/);
+    expect(r.coverage).toMatch(/still indexing/);
+    expect((await call('search_messages', { query: '  ' })).isError).toBe(true);
+  });
+
+  it('lists invitations and joins one by name', async () => {
+    expect((await call('list_invitations')).data.invitations[0]).toMatchObject({ room_id: '!inv:x', name: 'Projet Atlas', invited_by: 'Bob DURAND', invited_by_id: '@bob:x' });
+    expect((await call('join_room', { room: 'atlas' })).data).toMatchObject({ room_id: '!inv:x', name: 'Projet Atlas' });
+    await call('join_room', { room: '#public:x' });
+    expect(chat.writes).toEqual([['join', '!inv:x'], ['join', '#public:x']]);
+    expect((await call('join_room', { room: 'nothing like this' })).isError).toBe(true);
+  });
+
+  it('leaves, creates and invites', async () => {
+    await call('leave_room', { room: 'twake chat support' });
+    const created = (await call('create_room', { name: 'Atlas', invite: ['@bob:x'] })).data;
+    await call('create_room', { direct_with: '@carol:x' });
+    await call('invite_user', { room: '!t:x', user_id: '@carol:x' });
+    expect(created).toMatchObject({ room_id: '!new:x' });
+    expect(chat.writes).toEqual([
+      ['leave', '!t2:x'],
+      ['create', { name: 'Atlas', invite: ['@bob:x'], encrypted: true, direct: false }],
+      ['create', { invite: ['@carol:x'], encrypted: true, direct: true }],
+      ['invite', '!t:x', '@carol:x'],
+    ]);
+    expect((await call('create_room', {})).isError).toBe(true);
+    expect((await call('invite_user', { room: '!t:x', user_id: 'carol' })).isError).toBe(true);
   });
 });
 

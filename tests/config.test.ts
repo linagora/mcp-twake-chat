@@ -27,6 +27,15 @@ describe('loadConfig', () => {
     expect(c.transport).toEqual({ kind: 'stdio' });
     expect(c.draftsRoomName).toBe('Drafts');
     expect(c.downloadDir).toBe('/home/alice/Downloads/twake-chat');
+    expect(c.search).toEqual({ enabled: true, file: '/home/alice/.local/share/mcp-twake-chat/search.db', backfillDays: 365 });
+  });
+
+  it('configures the local search index', () => {
+    expect(loadConfig({ ...base, HOME: '/h', MATRIX_SEARCH_INDEX: 'off' }).search.enabled).toBe(false);
+    expect(loadConfig({ ...base, HOME: '/h', MATRIX_SEARCH_BACKFILL_DAYS: '30' }).search.backfillDays).toBe(30);
+    expect(loadConfig({ ...base, HOME: '/h', MATRIX_SEARCH_BACKFILL_DAYS: '0' }).search.backfillDays).toBe(0);
+    expect(() => loadConfig({ ...base, HOME: '/h', MATRIX_SEARCH_BACKFILL_DAYS: 'x' })).toThrow(/MATRIX_SEARCH_BACKFILL_DAYS/);
+    expect(() => loadConfig({ ...base, HOME: '/h', MATRIX_SEARCH_INDEX: 'maybe' })).toThrow(/MATRIX_SEARCH_INDEX/);
   });
 
   it('refuses plain HTTP except on localhost', () => {
