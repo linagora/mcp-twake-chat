@@ -56,13 +56,14 @@ page = (await call('get_messages', { room, limit: 10 })).messages;
 const edited = page.find((m) => m.id === sent.event_id);
 ok(edited?.edited && edited.text === `live test ${stamp} (edited)`, 'edit_message: edit applied when reading');
 
-const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'live-write-'));
+// send_file only reads inside the upload folder, download_attachment only writes inside the download folder
+const dir = mkdtempSync(join(process.env.MATRIX_UPLOAD_DIR ?? process.env.MATRIX_DOWNLOAD_DIR ?? tmpdir(), 'live-write-'));
 const local = join(dir, `sample-${stamp.replace(/:/g, '')}.txt`);
 const bytes = Buffer.concat([Buffer.from('mcp-twake-chat live test\n'), randomBytes(4096)]);
 writeFileSync(local, bytes);
 const f = await call('send_file', { room, path: local, caption: 'live test file' });
 ok(f.encrypted, `send_file: uploaded ${f.size} bytes, encrypted=${f.encrypted}`);
-const back = await call('download_attachment', { room, event_id: f.event_id, save_dir: join(dir, 'in') });
+const back = await call('download_attachment', { room, event_id: f.event_id, save_dir: join(process.env.MATRIX_DOWNLOAD_DIR ?? dir, 'live-write-in') });
 ok(sha(readFileSync(back.path)) === sha(bytes), `download_attachment: decrypted copy identical (${back.size} bytes)`);
 
 await call('redact_message', { room, event_id: sent.event_id, reason: 'live test cleanup' });
@@ -74,11 +75,12 @@ if (process.env.LIVE_READ_ROOM) {
   const msgs = (await call('get_messages', { room: process.env.LIVE_READ_ROOM, limit: 100 })).messages;
   const att = [...msgs].reverse().find((m) => m.attachment?.url || m.attachment?.encrypted);
   if (att) {
-    const d = await call('download_attachment', { room: process.env.LIVE_READ_ROOM, event_id: att.id, save_dir: join(dir, 'read') });
+    const d = await call('download_attachment', { room: process.env.LIVE_READ_ROOM, event_id: att.id, save_dir: join(process.env.MATRIX_DOWNLOAD_DIR ?? dir, 'live-write-read') });
     ok(d.size > 0, `download_attachment (read-only room): ${d.size} bytes, ${d.mimetype ?? '?'}`);
   } else console.log('skip download in LIVE_READ_ROOM: no attachment in the last 100 messages');
 }
 rmSync(dir, { recursive: true, force: true });
+if (process.env.MATRIX_DOWNLOAD_DIR) rmSync(join(process.env.MATRIX_DOWNLOAD_DIR, 'live-write-in'), { recursive: true, force: true });
 const refs = prompts.map((p) => /(?:Ref\.|Réf\.) (\w+)/.exec(p)?.[1]);
 ok(new Set(refs).size === prompts.length, `${prompts.length} approval prompts, each with its own reference`);
 await client.close();

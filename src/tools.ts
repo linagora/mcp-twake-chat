@@ -4,11 +4,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { formatTime, matchRooms, type MessageView, type RoomView } from './format.js';
 import type { ChatService, Directory, NewRoom, SearchRequest } from './service.js';
+import { assertInside } from './files.js';
 import { Approver, ApprovalUnavailable, NotApproved, type ApprovalMode, type Language } from './approval.js';
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const DRAFT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 const SEND = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true } as const;
+/** Writes a new local file (never replaces one); a read for the approval policy: no prompt. */
+const LOCAL_WRITE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
 const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true } as const;
 
 const IN_NAME =
@@ -71,7 +74,7 @@ export function registerTools(
   server: McpServer,
   chat: ChatService,
   directory: Directory | undefined,
-  opts: { timeZone: string; downloadDir?: string; sendScope?: 'all' | 'dm'; approval?: { mode: ApprovalMode; language: Language; timeoutMs: number } },
+  opts: { timeZone: string; downloadDir?: string; uploadDir?: string; sendScope?: 'all' | 'dm'; approval?: { mode: ApprovalMode; language: Language; timeoutMs: number } },
 ): void {
   const tz = opts.timeZone;
   const time = (ms: number) => formatTime(ms, tz);
@@ -440,7 +443,7 @@ export function registerTools(
       description: `Upload a local file to a room (encrypted when the room is end-to-end encrypted), with an optional caption. ${IN_NAME}${SCOPE}`,
       inputSchema: {
         room: roomArg,
-        path: z.string().describe('Absolute path of the local file.'),
+        path: z.string().describe('Absolute path of a local file inside the upload folder (MATRIX_UPLOAD_DIR, default MATRIX_DOWNLOAD_DIR).'),
         name: z.string().optional().describe('File name shown in the room (default: the local file name).'),
         caption: z.string().optional(),
       },
@@ -448,6 +451,13 @@ export function registerTools(
     },
     wrap(async (a: { room: string; path: string; name?: string; caption?: string }) => {
       if (!a.path.startsWith('/')) throw new ToolError('path must be absolute');
+      const uploadDir = opts.uploadDir ?? opts.downloadDir;
+      if (!uploadDir) throw new ToolError('No upload folder: set MATRIX_UPLOAD_DIR');
+      try {
+        assertInside(uploadDir, a.path, 'MATRIX_UPLOAD_DIR');
+      } catch (e) {
+        throw new ToolError(`${(e as Error).message}: copy the file there first`);
+      }
       const r = writableRoom(a.room);
       const file: { path: string; name?: string; caption?: string } = { path: a.path };
       if (a.name) file.name = a.name;
@@ -468,18 +478,23 @@ export function registerTools(
     'download_attachment',
     {
       title: 'Download an attachment',
-      description: 'Save the file, image, audio or video of a message to a local directory, decrypting it when the room is encrypted. Returns the local path (an existing file is never overwritten).',
+      description: 'Save the file, image, audio or video of a message inside the download folder (MATRIX_DOWNLOAD_DIR), decrypting it when the room is encrypted. Returns the local path (an existing file is never overwritten; files are private, mode 600).',
       inputSchema: {
         room: roomArg,
         event_id: eventArg,
-        save_dir: z.string().optional().describe('Absolute directory (default: MATRIX_DOWNLOAD_DIR).'),
+        save_dir: z.string().optional().describe('Absolute sub-folder of MATRIX_DOWNLOAD_DIR (default: MATRIX_DOWNLOAD_DIR itself).'),
       },
-      annotations: READ,
+      annotations: LOCAL_WRITE,
     },
     wrap(async (a: { room: string; event_id: string; save_dir?: string }) => {
+      if (!opts.downloadDir) throw new ToolError('No download folder: set MATRIX_DOWNLOAD_DIR');
       const dir = a.save_dir ?? opts.downloadDir;
-      if (!dir) throw new ToolError('No download directory: pass save_dir or set MATRIX_DOWNLOAD_DIR');
       if (!dir.startsWith('/')) throw new ToolError('save_dir must be absolute');
+      try {
+        assertInside(opts.downloadDir, dir, 'MATRIX_DOWNLOAD_DIR');
+      } catch (e) {
+        throw new ToolError((e as Error).message);
+      }
       const r = resolveRoom(a.room);
       const f = await chat.downloadAttachment(r.id, a.event_id, dir);
       return { room: { room_id: r.id, name: r.name }, path: f.path, name: f.name, mimetype: f.mimetype, size: f.size };

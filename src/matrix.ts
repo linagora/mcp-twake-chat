@@ -793,7 +793,7 @@ export class MatrixChat implements ChatService {
     const name = safeName(c.filename ?? c.body ?? mediaId);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const target = uniquePath(dir, name);
-    writeFileSync(target, bytes, { flag: 'wx' });
+    writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 });
     return { path: target, name, mimetype: c.info?.mimetype, size: bytes.length };
   }
 }

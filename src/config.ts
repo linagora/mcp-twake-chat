@@ -26,6 +26,8 @@ export interface Config {
   draftsRoomName: string;
   /** Default directory for download_attachment */
   downloadDir: string;
+  /** The only folder send_file may read from (default: downloadDir) */
+  uploadDir: string;
   /** Where write tools may act: everywhere, or direct messages only */
   sendScope: 'all' | 'dm';
   /** Prior approval of every write: elicit = the server asks the user (MCP elicitation); client = the MCP client confirms. */
@@ -112,6 +114,7 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
     storeKeyFile: expand(env.MATRIX_STORE_KEY_FILE ?? join(storeDir, 'store.key')),
     draftsRoomName: env.MATRIX_DRAFTS_ROOM_NAME ?? 'Drafts',
     downloadDir: expand(env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
+    uploadDir: expand(env.MATRIX_UPLOAD_DIR ?? env.MATRIX_DOWNLOAD_DIR ?? '~/Downloads/twake-chat'),
     search: searchConfig(env, storeDir),
     sendScope: sendScopeOf(env.MATRIX_SEND_SCOPE),
     approval: approvalOf(env),
