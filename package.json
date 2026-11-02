@@ -1,6 +1,6 @@
 {
   "name": "mcp-twake-chat",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server for Twake.ai Chat (Matrix): give any MCP-compatible AI assistant secure, end-to-end encrypted access to your Twake Chat conversations",
   "type": "module",
   "main": "build/index.js",
