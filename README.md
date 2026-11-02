@@ -21,6 +21,7 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 | [mcp-twake-drive](https://github.com/linagora/mcp-twake-drive) | Twake Drive | cozy-stack API |
 | **mcp-twake-chat** (this project) | Twake Chat | Matrix |
 | [mcp-twake-space](https://github.com/linagora/mcp-twake-space) | Twake Space (team spaces) | Twake Space API |
+| [mcp-twake-project](https://github.com/linagora/mcp-twake-project) | Twake Project (projects, boards, tasks) | Twake Project API |
 
 ## What it brings
 
