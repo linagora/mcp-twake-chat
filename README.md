@@ -131,7 +131,8 @@ Ref. 3f9a1c · Accept to do it now, refuse to cancel.
 | `MATRIX_STORE_DIR` | Private directory of the encrypted crypto store | `~/.local/share/mcp-twake-chat` |
 | `MATRIX_STORE_KEY_FILE` | Key encrypting the store (created on first start, `0600`) | `<store dir>/store.key` |
 | `MATRIX_DRAFTS_ROOM_NAME` | Name of the private drafts room | `Drafts` |
-| `MATRIX_DOWNLOAD_DIR` | Default directory of `download_attachment` | `~/Downloads/twake-chat` |
+| `MATRIX_DOWNLOAD_DIR` | The only folder `download_attachment` writes into (sub-folders allowed with `save_dir`) | `~/Downloads/twake-chat` |
+| `MATRIX_UPLOAD_DIR` | The only folder `send_file` reads from: copy a file there before sending it | `MATRIX_DOWNLOAD_DIR` |
 | `MATRIX_APPROVAL` | `elicit`: the server asks you before every action in your name; `client`: your MCP client confirms | `elicit` |
 | `MATRIX_APPROVAL_TIMEOUT_MS` | How long an approval prompt waits for your answer | `600000` |
 | `USER_LANGUAGE` | Language of the approval prompts, `en` or `fr` | `en` |

@@ -1,5 +1,21 @@
-import { existsSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { existsSync, mkdirSync, realpathSync } from 'node:fs';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+
+/**
+ * Refuses a local path outside `root`, following symbolic links through the deepest existing
+ * ancestor (the target itself may not exist yet). Prevents reading secrets or writing anywhere
+ * on the machine on behalf of a message or document that asks the assistant to.
+ */
+export function assertInside(root: string, target: string, variable: string): void {
+  if (!isAbsolute(target)) throw new Error(`the path must be absolute: ${target}`);
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  let existing = resolve(target);
+  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+  const rel = relative(realpathSync(root), realpathSync(existing));
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error(`the local path must stay inside ${root} (${variable})`);
+  }
+}
 
 export function parseMxc(uri: string): { server: string; mediaId: string } {
   const m = /^mxc:\/\/([^/]+)\/([^/?#]+)$/.exec(uri);

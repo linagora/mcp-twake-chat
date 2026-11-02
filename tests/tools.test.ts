@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -6,6 +9,10 @@ import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { registerTools, parseWhen } from '../src/tools.js';
 import type { ChatService, Directory, MessageQuery, NewRoom, SearchRequest } from '../src/service.js';
 import type { MessageView, RoomView } from '../src/format.js';
+
+/** Download folder of the tests (also the upload folder), with files send_file may read. */
+const DL = mkdtempSync(join(tmpdir(), 'twake-chat-dl-'));
+for (const f of ['report.pdf', 'a.pdf']) writeFileSync(join(DL, f), 'pdf');
 
 const T = (h: number, m = 0) => Date.UTC(2026, 10, 1, h, m);
 const room = (over: Partial<RoomView>): RoomView => ({ id: '!r:x', name: 'Room', kind: 'group', encrypted: true, members: 3, unread: false, notifications: 0, highlights: 0, lastActivity: T(6), ...over });
@@ -140,7 +147,7 @@ beforeEach(async () => {
   prompts = [];
   chat = new FakeChat();
   const server = new McpServer({ name: 't', version: '0' });
-  registerTools(server, chat, directory, { timeZone: 'Europe/Paris', downloadDir: '/tmp/dl' });
+  registerTools(server, chat, directory, { timeZone: 'Europe/Paris', downloadDir: DL });
   const [a, b] = InMemoryTransport.createLinkedPair();
   client = approvingClient();
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -154,7 +161,8 @@ describe('tool catalogue', () => {
     expect(Object.keys(by).sort()).toEqual(
       ['create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_invitations', 'list_room_members', 'list_rooms', 'search_messages', 'search_users', 'whoami', ...WRITE].sort(),
     );
-    for (const name of Object.keys(by).filter((n) => n !== 'create_draft' && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
+    for (const name of Object.keys(by).filter((n) => !['create_draft', 'download_attachment'].includes(n) && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
+    expect(by.download_attachment.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     expect(by.create_draft.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     for (const name of WRITE) {
       expect(by[name].annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
@@ -265,15 +273,15 @@ describe('write tools (v0.2)', () => {
 
   it('sends a local file given by absolute path only', async () => {
     expect((await call('send_file', { room: '!t:x', path: 'relative.pdf' })).isError).toBe(true);
-    const r = (await call('send_file', { room: '!t:x', path: '/tmp/report.pdf', caption: 'v2' })).data;
-    expect(chat.writes.at(-1)).toEqual(['file', '!t:x', { path: '/tmp/report.pdf', caption: 'v2' }]);
+    const r = (await call('send_file', { room: '!t:x', path: `${DL}/report.pdf`, caption: 'v2' })).data;
+    expect(chat.writes.at(-1)).toEqual(['file', '!t:x', { path: `${DL}/report.pdf`, caption: 'v2' }]);
     expect(r).toMatchObject({ event_id: '$f1', name: 'report.pdf', encrypted: true });
   });
 
   it('downloads an attachment to the default or given directory', async () => {
-    expect((await call('download_attachment', { room: '!t:x', event_id: '$m' })).data).toMatchObject({ path: '/tmp/dl/report.pdf', size: 1234 });
-    await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: '/srv/in' });
-    expect(chat.writes.at(-1)).toEqual(['download', '!t:x', '$m', '/srv/in']);
+    expect((await call('download_attachment', { room: '!t:x', event_id: '$m' })).data).toMatchObject({ path: `${DL}/report.pdf`, size: 1234 });
+    await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: `${DL}/in` });
+    expect(chat.writes.at(-1)).toEqual(['download', '!t:x', '$m', `${DL}/in`]);
     expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: 'rel' })).isError).toBe(true);
   });
 });
@@ -295,7 +303,7 @@ describe('MATRIX_SEND_SCOPE=dm', () => {
       ['react', { room: '!t:x', event_id: '$m', emoji: '👍' }],
       ['edit_message', { room: '!t:x', event_id: '$m', text: 'x' }],
       ['redact_message', { room: '!t:x', event_id: '$m' }],
-      ['send_file', { room: '!t:x', path: '/tmp/a.pdf' }],
+      ['send_file', { room: '!t:x', path: `${DL}/a.pdf` }],
     ] as const) expect((await call2(name, args)).isError).toBe(true);
     expect((await call2('send_message', { room: '!dm:x', text: 'hello' })).isError).toBeFalsy();
     expect(c2.writes).toEqual([['send', '!dm:x', 'hello', {}]]);
@@ -355,7 +363,7 @@ describe('v0.5: prior approval of every action in the user name', () => {
     ['react', { room: '!t:x', event_id: '$m1', emoji: '👍' }, 'react'],
     ['edit_message', { room: '!dm:x', event_id: '$m1', text: 'corrigé' }, 'edit'],
     ['redact_message', { room: '!dm:x', event_id: '$m1' }, 'redact'],
-    ['send_file', { room: '!t:x', path: '/tmp/does-not-exist.pdf' }, 'file'],
+    ['send_file', { room: '!t:x', path: `${DL}/does-not-exist.pdf` }, 'file'],
     ['join_room', { room: '#public:x' }, 'join'],
     ['leave_room', { room: '!t2:x' }, 'leave'],
     ['create_room', { name: 'Projet X', invite: ['@bob:x'] }, 'create'],
@@ -365,7 +373,7 @@ describe('v0.5: prior approval of every action in the user name', () => {
   async function connect(answer: () => 'accept' | 'decline' | 'cancel', opts: { elicitation?: boolean; mode?: 'elicit' | 'client' } = {}) {
     const c = new FakeChat();
     const server = new McpServer({ name: 't', version: '0' });
-    registerTools(server, c, directory, { timeZone: 'Europe/Paris', approval: { mode: opts.mode ?? 'elicit', language: 'fr', timeoutMs: 2000 } });
+    registerTools(server, c, directory, { timeZone: 'Europe/Paris', downloadDir: DL, approval: { mode: opts.mode ?? 'elicit', language: 'fr', timeoutMs: 2000 } });
     const [ct, st] = InMemoryTransport.createLinkedPair();
     await server.connect(st);
     const cl = opts.elicitation === false ? new Client({ name: 'c', version: '0' }) : approvingClient(answer);
@@ -423,5 +431,50 @@ describe('v0.5: prior approval of every action in the user name', () => {
     await t.callIt('create_draft', { text: 'brouillon', room: '!t:x' });
     expect(prompts).toEqual([]);
     expect(t.c.drafts).toHaveLength(1);
+  });
+});
+
+describe('local paths stay in their folders', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'twake-chat-out-'));
+  writeFileSync(join(outside, 'secret.txt'), 'secret');
+  if (!existsSync(join(DL, 'link-out'))) symlinkSync(outside, join(DL, 'link-out'));
+  if (!existsSync(join(DL, 'secret-link'))) symlinkSync(join(outside, 'secret.txt'), join(DL, 'secret-link'));
+
+  it('send_file refuses a file outside the upload folder, even through a symlink, before asking anything', async () => {
+    for (const path of [join(outside, 'secret.txt'), `${DL}/../${outside.split('/').pop()}/secret.txt`, join(DL, 'secret-link'), join(DL, 'link-out', 'secret.txt')]) {
+      const r = await call('send_file', { room: '!dm:x', path });
+      expect(r.isError, path).toBe(true);
+      expect(r.text).toMatch(/inside .*MATRIX_UPLOAD_DIR/);
+    }
+    expect(prompts).toEqual([]);
+    expect(chat.writes.filter((w) => w[0] === 'file')).toEqual([]);
+  });
+
+  it('send_file reads from a separate upload folder when one is set', async () => {
+    const uploads = mkdtempSync(join(tmpdir(), 'twake-chat-up-'));
+    writeFileSync(join(uploads, 'ok.pdf'), 'pdf');
+    const c = new FakeChat();
+    const server = new McpServer({ name: 't', version: '0' });
+    registerTools(server, c, directory, { timeZone: 'Europe/Paris', downloadDir: DL, uploadDir: uploads, approval: { mode: 'client', language: 'en', timeoutMs: 1000 } });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const cl = new Client({ name: 'c', version: '0' });
+    await cl.connect(ct);
+    expect((await cl.callTool({ name: 'send_file', arguments: { room: '!dm:x', path: join(uploads, 'ok.pdf') } })).isError).toBeFalsy();
+    expect((await cl.callTool({ name: 'send_file', arguments: { room: '!dm:x', path: `${DL}/report.pdf` } })).isError).toBe(true);
+  });
+
+  it('download_attachment refuses a folder outside the download folder, even through a symlink', async () => {
+    for (const save_dir of [outside, `${DL}/..`, join(DL, 'link-out'), join(DL, 'link-out', 'new'), '/etc']) {
+      expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir })).isError, save_dir).toBe(true);
+    }
+    expect(chat.writes.filter((w) => w[0] === 'download')).toEqual([]);
+    expect(existsSync(join(outside, 'new'))).toBe(false);
+  });
+
+  it('download_attachment accepts a sub-folder of the download folder', async () => {
+    mkdirSync(join(DL, 'sub'), { recursive: true });
+    expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: join(DL, 'sub') })).isError).toBe(false);
+    expect(prompts).toEqual([]);
   });
 });

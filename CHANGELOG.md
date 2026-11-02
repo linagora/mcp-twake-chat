@@ -4,6 +4,12 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+### Security
+- `send_file` read any local file and `download_attachment` wrote into any folder: a message asking the assistant to could send a secret (SSH key, token file) to a room or drop a file anywhere. `send_file` now only reads inside `MATRIX_UPLOAD_DIR` (new, default `MATRIX_DOWNLOAD_DIR`) and `download_attachment` only writes inside `MATRIX_DOWNLOAD_DIR` (`save_dir` must be a sub-folder), symbolic links resolved. Downloaded files are private (mode 600). Same fix as linagora/mcp-twake-drive#4 and linagora/mcp-twake-mail#10, reported by Crash--.
+
+### Changed
+- `download_attachment` is annotated as writing a local file (`readOnlyHint: false`); it asks for no approval, like other reads.
+
 ## [0.5.0] - 2026-11-01
 
 ### Added

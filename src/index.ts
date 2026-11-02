@@ -70,7 +70,7 @@ async function main(): Promise<void> {
 
   const newServer = () => {
     const server = new McpServer({ name: 'mcp-twake-chat', version: VERSION });
-    registerTools(server, chat, tom, { timeZone: config.timeZone, downloadDir: config.downloadDir, sendScope: config.sendScope, approval: config.approval });
+    registerTools(server, chat, tom, { timeZone: config.timeZone, downloadDir: config.downloadDir, uploadDir: config.uploadDir, sendScope: config.sendScope, approval: config.approval });
     return server;
   };
 
