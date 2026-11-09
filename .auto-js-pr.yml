@@ -1,0 +1,5 @@
+# Inscrit ce dépôt au bot auto-js-pr (mises à jour de dépendances vulnérables).
+#
+# Tests vitest autonomes : le bot détecte et lance `build`, `typecheck` et
+# `test`.
+{}
