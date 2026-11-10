@@ -1,6 +1,6 @@
 # mcp-twake-chat
 
-[![CI](https://github.com/linagora/mcp-twake-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/linagora/mcp-twake-chat/actions/workflows/ci.yml) [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE) [![Node.js >= 22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org/)
+[![npm version](https://img.shields.io/npm/v/mcp-twake-chat.svg)](https://www.npmjs.com/package/mcp-twake-chat) [![CI](https://github.com/linagora/mcp-twake-chat/actions/workflows/ci.yml/badge.svg)](https://github.com/linagora/mcp-twake-chat/actions/workflows/ci.yml) [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE) [![Node.js >= 22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org/)
 
 **Give your AI assistant secure access to Twake Chat, the Matrix messaging of the [Twake.ai](https://twake.ai) Digital Workplace, end-to-end encrypted rooms included.**
 
@@ -77,10 +77,17 @@ The homeserver never sees the text of end-to-end encrypted messages, so it canno
 ## Installation
 
 ```bash
+npm install -g mcp-twake-chat   # or run it on demand with npx -y mcp-twake-chat
+mcp-twake-chat check            # tests the configuration
+```
+
+From source:
+
+```bash
 git clone https://github.com/linagora/mcp-twake-chat.git
 cd mcp-twake-chat
 npm install
-npm run build          # then: node build/index.js
+npm run build          # then run: node build/index.js
 ```
 
 ## Configuration
@@ -146,7 +153,7 @@ Ref. 3f9a1c · Accept to do it now, refuse to cancel.
 | `USER_TIMEZONE` | IANA time zone for displayed and parsed dates | system |
 | `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` |
 
-Check a configuration with `node build/index.js check`: it connects, prints the account, device, encryption state and room counts, and exits.
+Check a configuration with `mcp-twake-chat check` (`node build/index.js check` from source): it connects, prints the account, device, encryption state and room counts, and exits.
 
 ## Use it with your assistant
 
@@ -179,7 +186,7 @@ Hermes shows the approval prompts in the desktop app, the terminal or on your me
 claude mcp add twake-chat --scope user \
   -e MATRIX_USER_ID=@jane:example.com \
   -e "MATRIX_TOKEN_COMMAND=/usr/local/bin/my-token-broker chat-token --json" \
-  -- node /path/to/mcp-twake-chat/build/index.js
+  -- npx -y mcp-twake-chat
 ```
 
 Do not configure the same device in two clients at once in stdio mode: the second one is refused by the store lock. Use the HTTP daemon instead.
