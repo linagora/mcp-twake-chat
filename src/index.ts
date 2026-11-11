@@ -19,7 +19,7 @@ import { TomClient } from './tom.js';
 import { createMcpHttpHandler } from './http.js';
 import { registerTools } from './tools.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.6.1';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 const threshold = LEVELS[(process.env.LOG_LEVEL as keyof typeof LEVELS) ?? 'info'] ?? LEVELS.info;
 
