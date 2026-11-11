@@ -76,6 +76,16 @@ The homeserver never sees the text of end-to-end encrypted messages, so it canno
 
 ## Installation
 
+### Quick start with mcp-twake-ai (recommended)
+
+```bash
+npx mcp-twake-ai setup
+```
+
+[mcp-twake-ai](https://github.com/linagora/mcp-twake-wizard) sets up this server and the other Twake.ai MCP servers for your Twake.ai account: it asks for your email, signs you in at the Twake.ai identity provider (in the browser, or with a code over SSH), and finds the agents on your computer (Claude Code, Hermes, Claude Desktop, Cursor, VS Code) and the services of your account. It then installs pinned versions of the servers, writes their entries in each agent's configuration and checks that each server starts. For any other agent, `mcp-twake-ai export --agent <id>` writes the configuration files.
+
+### Manual installation
+
 ```bash
 git clone https://github.com/linagora/mcp-twake-chat.git
 cd mcp-twake-chat
@@ -94,7 +104,11 @@ The server never logs in by itself: it needs a Matrix access token **and the dev
 | **Token command** (recommended) | `MATRIX_USER_ID`, `MATRIX_TOKEN_COMMAND` |
 | **Static token** (development) | `MATRIX_USER_ID`, `MATRIX_ACCESS_TOKEN`, `MATRIX_DEVICE_ID` |
 
-`MATRIX_TOKEN_COMMAND` prints `{"access_token": "...", "expires_at": <epoch seconds>, "device_id": "...", "user_id": "..."}` and is run again shortly before expiry. Your broker owns the login and the refresh-token rotation. With Synapse's SSO, a broker typically:
+`MATRIX_TOKEN_COMMAND` prints `{"access_token": "...", "expires_at": <epoch seconds>, "device_id": "...", "user_id": "..."}` and is run again shortly before expiry. Your broker owns the login and the refresh-token rotation.
+
+For Twake Chat, [mcp-twake-ai](https://github.com/linagora/mcp-twake-wizard) is that broker, with one device per agent: `mcp-twake-ai login --chat --agent <id>` signs that agent's device in once (`mcp-twake-ai setup` does it for you), then `MATRIX_TOKEN_COMMAND="/usr/local/bin/mcp-twake-ai token chat --agent <id>"` prints the JSON above for that device. Give the command with an absolute path, as some MCP clients do not see your `PATH`. It runs through the system shell (`sh`, or `cmd.exe` on Windows, where paths go in double quotes).
+
+Any other broker printing this JSON works. With Synapse's SSO, a broker typically:
 
 1. sends the user once to `/_matrix/client/v3/login/sso/redirect/<idp>?redirectUrl=…`;
 2. exchanges the returned `loginToken` with `POST /_matrix/client/v3/login` (`type: m.login.token`, `refresh_token: true`, a clear `initial_device_display_name`);
@@ -178,11 +192,11 @@ Hermes shows the approval prompts in the desktop app, the terminal or on your me
 ```bash
 claude mcp add twake-chat --scope user \
   -e MATRIX_USER_ID=@jane:example.com \
-  -e "MATRIX_TOKEN_COMMAND=/usr/local/bin/my-token-broker chat-token --json" \
+  -e "MATRIX_TOKEN_COMMAND=/usr/local/bin/mcp-twake-ai token chat --agent claude-code" \
   -- node /path/to/mcp-twake-chat/build/index.js
 ```
 
-Do not configure the same device in two clients at once in stdio mode: the second one is refused by the store lock. Use the HTTP daemon instead.
+Do not configure the same device in two clients at once in stdio mode: the second one is refused by the store lock. Use the HTTP daemon instead, or give each client its own device (`mcp-twake-ai login --chat --agent <id>`).
 
 ## Recommended safe configuration
 
