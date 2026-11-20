@@ -4,7 +4,8 @@
  * answer back. Requests without a session (no initialize first) are still served statelessly.
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -175,4 +176,31 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
       sessions.clear();
     },
   });
+}
+
+/** Listens (port 0: the system picks), then serves; the allowed hosts are those of the real port. */
+export async function startHttp(
+  newServer: () => McpServer,
+  opts: HttpOptions,
+): Promise<{ url: string; port: number; close(): Promise<void> }> {
+  const http = createServer();
+  await new Promise<void>((resolve, reject) => {
+    http.once('error', reject);
+    http.listen(opts.port, opts.host, () => {
+      http.off('error', reject);
+      resolve();
+    });
+  });
+  const port = (http.address() as AddressInfo).port;
+  const handler = createMcpHttpHandler(newServer, { ...opts, port });
+  http.on('request', (req, res) => void handler(req, res));
+  return {
+    url: `http://${opts.host}:${port}/mcp`,
+    port,
+    close: async () => {
+      await handler.close();
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    },
+  };
 }

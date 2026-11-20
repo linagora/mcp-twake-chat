@@ -156,10 +156,14 @@ Ref. 3f9a1c · Accept to do it now, refuse to cancel.
 | `MATRIX_SEARCH_INDEX` | `off` disables the local search index (encrypted rooms are then not searchable) | `on` |
 | `MATRIX_SEARCH_BACKFILL_DAYS` | History indexed in the background, in days (`0` = only new messages) | `365` |
 | `MCP_TRANSPORT` | `stdio` or `http` | `stdio` |
-| `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | HTTP listen address (keep it on loopback) | `127.0.0.1` / `3995` |
+| `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | HTTP listen address (keep it on loopback); port `0` lets the system pick a free one | `127.0.0.1` / `3995` |
 | `MCP_HTTP_TOKEN_FILE` | File holding a bearer token required from HTTP clients | none |
+| `MCP_HTTP_STATE_FILE` | Shared mode: once the store is held and the port listens, the server writes this file (mode 600, folder 700) with its pid, URL, bearer token, account and device, and removes it when it stops. Without `MCP_HTTP_TOKEN_FILE` it draws its own token, written into this file only | none |
+| `MCP_HTTP_EXIT_WHEN_IDLE_MS` | Stop once no MCP session has been open for this long (a request without a session does not count) | none |
 | `USER_TIMEZONE` | IANA time zone for displayed and parsed dates | system |
 | `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` |
+
+**Shared mode.** This is the mode mcp-twake-ai uses to share one Chat server between the clients of an agent. With `MCP_TRANSPORT=http`, `MCP_HTTP_PORT=0` and `MCP_HTTP_STATE_FILE`, a client reads the state file, checks the server with its token, and joins it. `POST /mcp/shutdown` with the bearer token answers `202` and stops the server as `SIGTERM` does (store closed, state file removed); it exists only with a token, and is refused from another host or from a web page (an `Origin` header). When the device store is already held by another living process, the server exits with code `75` (`EX_TEMPFAIL`): another start won, join it.
 
 Check a configuration with `node build/index.js check`: it connects, prints the account, device, encryption state and room counts, and exits.
 
@@ -244,7 +248,7 @@ See [SECURITY.md](SECURITY.md).
 
 | Symptom | Fix |
 |---|---|
-| `already used by process N` | Another server holds this device: stop it, or connect to it over HTTP. |
+| `already used by process N` (exit code 75) | Another server holds this device: stop it, or connect to it over HTTP. |
 | `Not done: this MCP client cannot ask the user for approval` | Your MCP client does not support elicitation: use one that does, or `MATRIX_APPROVAL=client` if it confirms writes itself. |
 | `Not done: no answer to the approval request` | The prompt timed out or nobody could answer (cron, one-shot query): nothing was sent. |
 | `token command JSON has no device_id` | The broker must print the device id that owns the token. |
