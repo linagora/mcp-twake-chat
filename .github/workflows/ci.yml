@@ -56,4 +56,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - run: npx vitest run tests/cli-call tests/shared-mode.test.ts tests/state-file.test.ts tests/http.test.ts tests/store.test.ts tests/config.test.ts
+      - run: npx vitest run tests/cli-call tests/shared-mode.test.ts tests/state-file.test.ts tests/http.test.ts
+      # the rest of store.test.ts and config.test.ts assumes POSIX paths and file modes
+      - run: npx vitest run tests/store.test.ts -t "exit code 75"
