@@ -10,6 +10,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { startHttp, type HttpOptions } from './http.js';
 import { removeStateFile, writeStateFile } from './state-file.js';
 
+/** a session whose client's event stream is closed and which says nothing for this long is gone */
+const ORPHAN_MS = 60_000;
+
 export interface ServeOptions {
   host: string;
   port: number;
@@ -31,6 +34,9 @@ export async function serveHttp(newServer: () => McpServer, o: ServeOptions): Pr
     secret,
     log: o.log,
     exitWhenIdleMs: o.exitWhenIdleMs,
+    // the shared mode's clients are mcp-twake-ai relays, which keep an event stream open while they live: a client
+    // killed without a DELETE (SIGKILL, Windows) must not keep the server for the 6 hours of idleMs
+    ...(o.stateFile ? { orphanMs: ORPHAN_MS } : {}),
     onShutdown: () => o.onStop(),
     onIdle: () => {
       o.log?.('info', `no session for ${Math.round((o.exitWhenIdleMs ?? 0) / 1000)} s: stopping`);

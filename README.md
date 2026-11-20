@@ -159,7 +159,7 @@ Ref. 3f9a1c · Accept to do it now, refuse to cancel.
 | `MCP_HTTP_HOST` / `MCP_HTTP_PORT` | HTTP listen address (keep it on loopback); port `0` lets the system pick a free one | `127.0.0.1` / `3995` |
 | `MCP_HTTP_TOKEN_FILE` | File holding a bearer token required from HTTP clients | none |
 | `MCP_HTTP_STATE_FILE` | Shared mode: once the store is held and the port listens, the server writes this file (mode 600, folder 700) with its pid, URL, bearer token, account and device, and removes it when it stops. Without `MCP_HTTP_TOKEN_FILE` it draws its own token, written into this file only | none |
-| `MCP_HTTP_EXIT_WHEN_IDLE_MS` | Stop once no MCP session has been open for this long (a request without a session does not count) | none |
+| `MCP_HTTP_EXIT_WHEN_IDLE_MS` | Stop once no MCP session has been open for this long (a request without a session does not count). In the shared mode, a session whose client closed its event stream without ending it (killed) is closed after 1 minute without a request | none |
 | `USER_TIMEZONE` | IANA time zone for displayed and parsed dates | system |
 | `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | `info` |
 

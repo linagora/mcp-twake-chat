@@ -17,6 +17,11 @@ export interface HttpOptions {
   secret?: string;
   /** Sessions idle longer than this are closed (default 6 hours; the client then initializes again). */
   idleMs?: number;
+  /**
+   * A session that had its event stream (GET) open, has none any more and made no request for this long is closed:
+   * its client went without a DELETE (killed, or stopped on Windows). Not set: only idleMs applies.
+   */
+  orphanMs?: number;
   log?: (level: 'debug' | 'info' | 'warn' | 'error', msg: string) => void;
   /** POST /mcp/shutdown with the token was received (answered 202 first). */
   onShutdown?: () => void;
@@ -29,6 +34,9 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   last: number;
+  /** responses open now (an event stream, a tool call waiting for an approval), and whether an event stream ever was */
+  streams: number;
+  streamed: boolean;
 }
 
 const MAX_BODY = 4 * 1024 * 1024;
@@ -86,17 +94,19 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
     if (sessions.size === 0 && emptySince === Number.POSITIVE_INFINITY) emptySince = Date.now();
   };
 
+  const orphanMs = opts.orphanMs;
+  const orphaned = (s: Session, now: number) => orphanMs !== undefined && s.streamed && s.streams === 0 && now - s.last > orphanMs;
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [id, s] of sessions) {
-      if (now - s.last > idleMs) {
+      if (now - s.last > idleMs || orphaned(s, now)) {
         forget(id);
         void s.transport.close();
         void s.server.close();
         opts.log?.('debug', `session ${id.slice(0, 8)} closed after ${Math.round(idleMs / 60000)} min idle`);
       }
     }
-  }, Math.min(idleMs, 300_000));
+  }, Math.max(50, Math.min(idleMs, orphanMs ?? Number.POSITIVE_INFINITY, 300_000)));
   sweep.unref();
 
   let idleCalled = false;
@@ -147,6 +157,12 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
         const s = sessions.get(sessionId);
         if (!s) return void json(res, 404, { jsonrpc: '2.0', error: { code: -32001, message: 'Session not found: initialize again' }, id: null });
         s.last = Date.now();
+        if (req.method === 'GET') s.streamed = true;
+        s.streams++;
+        res.once('close', () => {
+          s.streams--;
+          s.last = Date.now();
+        });
         const body = req.method === 'POST' ? await readJson(req) : undefined;
         await s.transport.handleRequest(req, res, body);
         if (req.method === 'DELETE') forget(sessionId);
@@ -161,7 +177,7 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
           enableDnsRebindingProtection: true,
           allowedHosts,
           onsessioninitialized: (id) => {
-            sessions.set(id, { transport, server, last: Date.now() });
+            sessions.set(id, { transport, server, last: Date.now(), streams: 0, streamed: false });
             emptySince = Number.POSITIVE_INFINITY;
           },
         });

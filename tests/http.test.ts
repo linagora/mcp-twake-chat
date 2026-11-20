@@ -244,6 +244,24 @@ describe('shared mode: shutdown route and idle exit', () => {
     await s.close();
   });
 
+  it('closes the session of a client that went without a word (its stream closed), then exits once idle', async () => {
+    let idle = 0;
+    const s = await serve({ orphanMs: 300, exitWhenIdleMs: 300, onIdle: () => void idle++ });
+    const client = new Client({ name: 'c', version: '0' });
+    const transport = new StreamableHTTPClientTransport(new URL(s.url), { requestInit: { headers: { authorization: 'Bearer s3cret' } } });
+    await client.connect(transport);
+    // its stream stays open while it lives, silent or not
+    await new Promise((r) => setTimeout(r, 800));
+    expect(s.handlerOf.sessions()).toBe(1);
+    expect(idle).toBe(0);
+    // killed: no DELETE, only its connections closing
+    await client.close();
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(s.handlerOf.sessions()).toBe(0);
+    expect(idle).toBe(1);
+    await s.close();
+  });
+
   it('does not exit while a session is open, and counts the delay again once it closes', async () => {
     let idle = 0;
     const s = await serve({ exitWhenIdleMs: 300, onIdle: () => void idle++ });
