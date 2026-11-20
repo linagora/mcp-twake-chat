@@ -3,7 +3,7 @@
  * request the server sends to the client in the middle of a tool call (an approval prompt) gets its
  * answer back. Requests without a session (no initialize first) are still served statelessly.
  */
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -32,6 +32,16 @@ interface Session {
 }
 
 const MAX_BODY = 4 * 1024 * 1024;
+
+/**
+ * What GET /mcp/proof answers: the server holds the token, said without the token. Loopback is shared by every account
+ * of the machine: once a server is gone, anyone can listen on its port, so a client checks the proof before it sends
+ * the token to whatever answers there.
+ */
+export function tokenProof(token: string, nonce: string): string {
+  return createHmac('sha256', token).update(`twake-chat-proof:${nonce}`).digest('hex');
+}
+const NONCE = /^[0-9a-f]{32,128}$/i;
 
 function readJson(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -105,7 +115,17 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
     if (!req.url?.startsWith('/mcp')) return void res.writeHead(404).end();
     // DNS rebinding: another name for this address is refused before any route (the transport checks it too)
     if (!hostAllowed(req)) return void json(res, 403, { error: 'forbidden host' });
-    const shutdownRoute = req.url === '/mcp/shutdown' || req.url.startsWith('/mcp/shutdown?');
+    const route = (name: string) => req.url === `/mcp/${name}` || req.url!.startsWith(`/mcp/${name}?`);
+    const shutdownRoute = route('shutdown');
+    // a client proves the server before it sends the token: no token asked here, no Origin (a web page) answered
+    if (route('proof')) {
+      if (!opts.secret) return void res.writeHead(404).end();
+      if (req.headers.origin !== undefined) return void json(res, 403, { error: 'forbidden origin' });
+      if (req.method !== 'GET') return void res.writeHead(405, { allow: 'GET' }).end();
+      const nonce = new URL(req.url, 'http://localhost').searchParams.get('nonce') ?? '';
+      if (!NONCE.test(nonce)) return void json(res, 400, { error: 'nonce: 32 to 128 hexadecimal characters' });
+      return void json(res, 200, { proof: tokenProof(opts.secret, nonce) });
+    }
     // without a token anyone on this machine could stop the server: no such route then
     if (shutdownRoute && !opts.secret) return void res.writeHead(404).end();
     if (!authorized(req)) return void json(res, 401, { error: 'unauthorized' });

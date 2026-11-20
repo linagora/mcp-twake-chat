@@ -2,6 +2,7 @@
  * The approval prompt (an elicitation request sent by the server during a tool call) must reach the
  * client and its answer must come back over Streamable HTTP: this needs sessions.
  */
+import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, request as httpRequest, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -194,6 +195,36 @@ describe('shared mode: shutdown route and idle exit', () => {
     expect(await rawRequest(s.port, '/mcp', { host: `evil.example.com:${s.port}`, authorization: 'Bearer s3cret' })).toBe(403);
     const open = await serve({ secret: undefined });
     expect(await rawRequest(open.port, '/mcp', { host: `evil.example.com:${open.port}` })).toBe(403);
+    await open.close();
+    await s.close();
+  });
+
+  it('proves it holds the token without revealing it, to anyone on its host', async () => {
+    const s = await serve({});
+    const nonce = 'a1'.repeat(16);
+    const r = await fetch(`${s.url}/proof?nonce=${nonce}`);
+    expect(r.status).toBe(200);
+    const want = createHmac('sha256', 's3cret').update(`twake-chat-proof:${nonce}`).digest('hex');
+    expect(await r.json()).toEqual({ proof: want });
+    // another nonce, another proof: an answer cannot be replayed
+    const other = await (await fetch(`${s.url}/proof?nonce=${'b2'.repeat(16)}`)).json();
+    expect(other.proof).not.toBe(want);
+    expect(JSON.stringify(other)).not.toContain('s3cret');
+    await s.close();
+  });
+
+  it('refuses a proof without a usable nonce, from another host, from a web page, or without a token', async () => {
+    const s = await serve({});
+    const nonce = 'c3'.repeat(16);
+    expect((await fetch(`${s.url}/proof`)).status).toBe(400);
+    expect((await fetch(`${s.url}/proof?nonce=abc`)).status).toBe(400);
+    expect((await fetch(`${s.url}/proof?nonce=${'z'.repeat(32)}`)).status).toBe(400);
+    expect((await fetch(`${s.url}/proof?nonce=${nonce}`, { method: 'POST' })).status).toBe(405);
+    expect(await rawRequest(s.port, `/mcp/proof?nonce=${nonce}`, { host: `evil.example.com:${s.port}` }, 'GET')).toBe(403);
+    expect(await rawRequest(s.port, `/mcp/proof?nonce=${nonce}`, { host: `127.0.0.1:${s.port}`, origin: 'https://evil.example' }, 'GET')).toBe(403);
+    expect(await rawRequest(s.port, `/mcp/proof?nonce=${nonce}`, { host: `127.0.0.1:${s.port}` }, 'GET')).toBe(200);
+    const open = await serve({ secret: undefined });
+    expect(await rawRequest(open.port, `/mcp/proof?nonce=${nonce}`, { host: `127.0.0.1:${open.port}` }, 'GET')).toBe(404);
     await open.close();
     await s.close();
   });
