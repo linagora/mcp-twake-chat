@@ -36,10 +36,11 @@ const MAX_BODY = 4 * 1024 * 1024;
 /**
  * What GET /mcp/proof answers: the server holds the token, said without the token. Loopback is shared by every account
  * of the machine: once a server is gone, anyone can listen on its port, so a client checks the proof before it sends
- * the token to whatever answers there.
+ * the token to whatever answers there. The proof is bound to the port the server listens on: a program on another port
+ * that passes the client's nonce on to the real server gets a proof that does not hold for its own port.
  */
-export function tokenProof(token: string, nonce: string): string {
-  return createHmac('sha256', token).update(`twake-chat-proof:${nonce}`).digest('hex');
+export function tokenProof(token: string, nonce: string, port: number): string {
+  return createHmac('sha256', token).update(`twake-chat-proof:${nonce}:${port}`).digest('hex');
 }
 const NONCE = /^[0-9a-f]{32,128}$/i;
 
@@ -124,7 +125,8 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
       if (req.method !== 'GET') return void res.writeHead(405, { allow: 'GET' }).end();
       const nonce = new URL(req.url, 'http://localhost').searchParams.get('nonce') ?? '';
       if (!NONCE.test(nonce)) return void json(res, 400, { error: 'nonce: 32 to 128 hexadecimal characters' });
-      return void json(res, 200, { proof: tokenProof(opts.secret, nonce) });
+      // the pid: a consistency check against the state file for the client, not a proof of anything
+      return void json(res, 200, { proof: tokenProof(opts.secret, nonce, opts.port), pid: process.pid });
     }
     // without a token anyone on this machine could stop the server: no such route then
     if (shutdownRoute && !opts.secret) return void res.writeHead(404).end();

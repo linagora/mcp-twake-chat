@@ -204,8 +204,9 @@ describe('shared mode: shutdown route and idle exit', () => {
     const nonce = 'a1'.repeat(16);
     const r = await fetch(`${s.url}/proof?nonce=${nonce}`);
     expect(r.status).toBe(200);
-    const want = createHmac('sha256', 's3cret').update(`twake-chat-proof:${nonce}`).digest('hex');
-    expect(await r.json()).toEqual({ proof: want });
+    // bound to the port it answers on: a proof fetched from the real server through another port does not hold there
+    const want = createHmac('sha256', 's3cret').update(`twake-chat-proof:${nonce}:${s.port}`).digest('hex');
+    expect(await r.json()).toEqual({ proof: want, pid: process.pid });
     // another nonce, another proof: an answer cannot be replayed
     const other = await (await fetch(`${s.url}/proof?nonce=${'b2'.repeat(16)}`)).json();
     expect(other.proof).not.toBe(want);
