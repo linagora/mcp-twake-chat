@@ -7,7 +7,9 @@ export type AuthConfig =
 
 export type RecoveryConfig = { mode: 'tom' } | { mode: 'key'; keyFile: string } | { mode: 'off' };
 
-export type TransportConfig = { kind: 'stdio' } | { kind: 'http'; host: string; port: number; tokenFile?: string };
+export type TransportConfig =
+  | { kind: 'stdio' }
+  | { kind: 'http'; host: string; port: number; tokenFile?: string; stateFile?: string; exitWhenIdleMs?: number };
 
 export interface Config {
   /** Matrix user id, e.g. @alice:example.com */
@@ -98,9 +100,16 @@ export function loadConfig(input: NodeJS.ProcessEnv = process.env): Config {
   let transport: TransportConfig = { kind: 'stdio' };
   if ((env.MCP_TRANSPORT ?? 'stdio') === 'http') {
     const port = Number(env.MCP_HTTP_PORT ?? 3995);
-    if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('MCP_HTTP_PORT must be a TCP port');
+    // 0: the system picks a free port (the shared mode of mcp-twake-ai: no port to reserve, nothing to race for)
+    if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('MCP_HTTP_PORT must be a TCP port, or 0');
     transport = { kind: 'http', host: env.MCP_HTTP_HOST ?? '127.0.0.1', port };
     if (env.MCP_HTTP_TOKEN_FILE) transport.tokenFile = expand(env.MCP_HTTP_TOKEN_FILE);
+    if (env.MCP_HTTP_STATE_FILE) transport.stateFile = expand(env.MCP_HTTP_STATE_FILE);
+    if (env.MCP_HTTP_EXIT_WHEN_IDLE_MS !== undefined) {
+      const ms = Number(env.MCP_HTTP_EXIT_WHEN_IDLE_MS);
+      if (!Number.isInteger(ms) || ms <= 0) throw new Error('MCP_HTTP_EXIT_WHEN_IDLE_MS must be a positive number of milliseconds');
+      transport.exitWhenIdleMs = ms;
+    }
   }
 
   const storeDir = expand(env.MATRIX_STORE_DIR ?? join(env.XDG_DATA_HOME ?? join(home, '.local/share'), 'mcp-twake-chat'));
