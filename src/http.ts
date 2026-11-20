@@ -17,6 +17,11 @@ export interface HttpOptions {
   /** Sessions idle longer than this are closed (default 6 hours; the client then initializes again). */
   idleMs?: number;
   log?: (level: 'debug' | 'info' | 'warn' | 'error', msg: string) => void;
+  /** POST /mcp/shutdown with the token was received (answered 202 first). */
+  onShutdown?: () => void;
+  /** Calls onIdle once no session has been open for this long (a request without a session does not count). */
+  exitWhenIdleMs?: number;
+  onIdle?: () => void;
 }
 
 interface Session {
@@ -62,11 +67,18 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
   };
   const json = (res: ServerResponse, status: number, body: unknown) => res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 
+  // since when no session has been open (infinite while one is)
+  let emptySince = Date.now();
+  const forget = (id: string) => {
+    sessions.delete(id);
+    if (sessions.size === 0 && emptySince === Number.POSITIVE_INFINITY) emptySince = Date.now();
+  };
+
   const sweep = setInterval(() => {
     const now = Date.now();
     for (const [id, s] of sessions) {
       if (now - s.last > idleMs) {
-        sessions.delete(id);
+        forget(id);
         void s.transport.close();
         void s.server.close();
         opts.log?.('debug', `session ${id.slice(0, 8)} closed after ${Math.round(idleMs / 60000)} min idle`);
@@ -75,9 +87,30 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
   }, Math.min(idleMs, 300_000));
   sweep.unref();
 
+  let idleCalled = false;
+  const exitWhenIdleMs = opts.exitWhenIdleMs;
+  const idleTimer =
+    exitWhenIdleMs === undefined
+      ? undefined
+      : setInterval(() => {
+          if (idleCalled || sessions.size > 0 || Date.now() - emptySince < exitWhenIdleMs) return;
+          idleCalled = true;
+          opts.onIdle?.();
+        }, Math.min(exitWhenIdleMs, 10_000));
+  idleTimer?.unref();
+  const hostAllowed = (req: IncomingMessage) => allowedHosts.includes(String(req.headers.host ?? ''));
+
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!req.url?.startsWith('/mcp')) return void res.writeHead(404).end();
     if (!authorized(req)) return void json(res, 401, { error: 'unauthorized' });
+    // the shared mode is stopped by its clients with the token, never by a signal (Windows has none to catch)
+    if (req.url === '/mcp/shutdown' || req.url.startsWith('/mcp/shutdown?')) {
+      if (!hostAllowed(req)) return void json(res, 403, { error: 'forbidden host' });
+      if (req.method !== 'POST') return void res.writeHead(405, { allow: 'POST' }).end();
+      res.writeHead(202).end();
+      opts.onShutdown?.();
+      return;
+    }
     const sid = req.headers['mcp-session-id'];
     const sessionId = Array.isArray(sid) ? sid[0] : sid;
     try {
@@ -87,7 +120,7 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
         s.last = Date.now();
         const body = req.method === 'POST' ? await readJson(req) : undefined;
         await s.transport.handleRequest(req, res, body);
-        if (req.method === 'DELETE') sessions.delete(sessionId);
+        if (req.method === 'DELETE') forget(sessionId);
         return;
       }
       if (req.method !== 'POST') return void res.writeHead(405, { allow: 'POST' }).end();
@@ -100,10 +133,11 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
           allowedHosts,
           onsessioninitialized: (id) => {
             sessions.set(id, { transport, server, last: Date.now() });
+            emptySince = Number.POSITIVE_INFINITY;
           },
         });
         transport.onclose = () => {
-          if (transport.sessionId) sessions.delete(transport.sessionId);
+          if (transport.sessionId && sessions.has(transport.sessionId)) forget(transport.sessionId);
         };
         await server.connect(transport);
         await transport.handleRequest(req, res, body);
@@ -127,6 +161,7 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
     sessions: () => sessions.size,
     close: async () => {
       clearInterval(sweep);
+      if (idleTimer) clearInterval(idleTimer);
       for (const s of sessions.values()) {
         await s.transport.close().catch(() => {});
         await s.server.close().catch(() => {});

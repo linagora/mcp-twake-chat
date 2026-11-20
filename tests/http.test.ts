@@ -3,7 +3,7 @@
  * client and its answer must come back over Streamable HTTP: this needs sessions.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createServer, type Server as HttpServer } from 'node:http';
+import { createServer, request as httpRequest, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -97,5 +97,90 @@ describe('approval over Streamable HTTP', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
     });
     expect(r.status).toBe(404);
+  });
+});
+
+describe('shared mode: shutdown route and idle exit', () => {
+  async function serve(extra: Partial<Parameters<typeof createMcpHttpHandler>[1]>) {
+    const h = createServer();
+    await new Promise<void>((r) => h.listen(0, '127.0.0.1', r));
+    const port = (h.address() as AddressInfo).port;
+    const handlerOf = createMcpHttpHandler(newServer, { host: '127.0.0.1', port, secret: 's3cret', ...extra });
+    h.on('request', (req, res) => void handlerOf(req, res));
+    return {
+      port,
+      url: `http://127.0.0.1:${port}/mcp`,
+      handlerOf,
+      close: async () => {
+        await handlerOf.close();
+        await new Promise((r) => h.close(r));
+      },
+    };
+  }
+
+  /** fetch() cannot set Host: a raw request as a page of another site (DNS rebinding) would send it */
+  function postWithHost(port: number, path: string, host: string): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path, method: 'POST', headers: { host, authorization: 'Bearer s3cret' } }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('stops on POST /mcp/shutdown with the token, refuses it without', async () => {
+    let stopped = 0;
+    const s = await serve({ onShutdown: () => void stopped++ });
+    expect((await fetch(`${s.url}/shutdown`, { method: 'POST' })).status).toBe(401);
+    expect((await fetch(`${s.url}/shutdown`, { method: 'POST', headers: { authorization: 'Bearer nope' } })).status).toBe(401);
+    expect((await fetch(`${s.url}/shutdown`, { method: 'GET', headers: { authorization: 'Bearer s3cret' } })).status).toBe(405);
+    expect(stopped).toBe(0);
+    expect((await fetch(`${s.url}/shutdown`, { method: 'POST', headers: { authorization: 'Bearer s3cret' } })).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(1);
+    await s.close();
+  });
+
+  it('refuses the shutdown route on another host, as the rest', async () => {
+    let stopped = 0;
+    const s = await serve({ onShutdown: () => void stopped++ });
+    expect(await postWithHost(s.port, '/mcp/shutdown', 'evil.example.com')).toBe(403);
+    expect(await postWithHost(s.port, '/mcp/shutdown', `evil.example.com:${s.port}`)).toBe(403);
+    expect(stopped).toBe(0);
+    expect(await postWithHost(s.port, '/mcp/shutdown', `localhost:${s.port}`)).toBe(202);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(1);
+    await s.close();
+  });
+
+  it('exits once no session has been open for the idle delay, a ping without session not counting', async () => {
+    let idle = 0;
+    const s = await serve({ exitWhenIdleMs: 300, onIdle: () => void idle++ });
+    // a ping without a session (as a client checking the server does)
+    await fetch(s.url, {
+      method: 'POST',
+      headers: { authorization: 'Bearer s3cret', 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+    });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(idle).toBe(1);
+    await s.close();
+  });
+
+  it('does not exit while a session is open, and counts the delay again once it closes', async () => {
+    let idle = 0;
+    const s = await serve({ exitWhenIdleMs: 300, onIdle: () => void idle++ });
+    const client = new Client({ name: 'c', version: '0' });
+    const transport = new StreamableHTTPClientTransport(new URL(s.url), { requestInit: { headers: { authorization: 'Bearer s3cret' } } });
+    await client.connect(transport);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(idle).toBe(0);
+    await transport.terminateSession();
+    await client.close();
+    await new Promise((r) => setTimeout(r, 600));
+    expect(idle).toBe(1);
+    await s.close();
   });
 });
