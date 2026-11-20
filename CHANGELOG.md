@@ -4,6 +4,8 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-20
+
 ### Added
 - A shared HTTP mode mcp-twake-ai can start, find and stop: `MCP_HTTP_PORT=0` lets the system pick the port; `MCP_HTTP_STATE_FILE` publishes the server's pid, URL, token, account and device once it holds its store and listens (mode 600, removed when it stops), with a token it draws itself when no `MCP_HTTP_TOKEN_FILE` is given; `POST /mcp/shutdown` with the token stops it as `SIGTERM` does; `MCP_HTTP_EXIT_WHEN_IDLE_MS` stops it once no session has been open for that long; `GET /mcp/proof?nonce=…` proves the server holds the token without revealing it (an HMAC of the nonce and of the port it listens on), so a client never sends its token to another program listening on a port the server left; a store held by another process exits with code 75. Fixes #18 (a clean stop over HTTP).
 - `approve_batch` lets an agent have a series of actions approved at once: one approval for the exact list, then each matching call (with `batchId`) runs without a question, once, within 15 minutes; anything else, or anything changed since, asks as usual.
