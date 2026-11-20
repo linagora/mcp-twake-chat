@@ -159,9 +159,11 @@ describe('tool catalogue', () => {
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
     const WRITE = ['send_message', 'react', 'edit_message', 'redact_message', 'send_file', 'join_room', 'leave_room', 'create_room', 'invite_user'];
     expect(Object.keys(by).sort()).toEqual(
-      ['create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_invitations', 'list_room_members', 'list_rooms', 'search_messages', 'search_users', 'whoami', ...WRITE].sort(),
+      ['approve_batch', 'create_draft', 'download_attachment', 'get_mentions', 'get_messages', 'get_room_info', 'get_thread', 'get_unread', 'get_user_profile', 'list_invitations', 'list_room_members', 'list_rooms', 'search_messages', 'search_users', 'whoami', ...WRITE].sort(),
     );
-    for (const name of Object.keys(by).filter((n) => !['create_draft', 'download_attachment'].includes(n) && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
+    for (const name of Object.keys(by).filter((n) => !['approve_batch', 'create_draft', 'download_attachment'].includes(n) && !WRITE.includes(n))) expect(by[name].annotations?.readOnlyHint).toBe(true);
+    // approve_batch only asks the user: nothing written, nothing outside the server
+    expect(by.approve_batch.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     expect(by.download_attachment.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     expect(by.create_draft.annotations).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     for (const name of WRITE) {
@@ -476,5 +478,112 @@ describe('local paths stay in their folders', () => {
     mkdirSync(join(DL, 'sub'), { recursive: true });
     expect((await call('download_attachment', { room: '!t:x', event_id: '$m', save_dir: join(DL, 'sub') })).isError).toBe(false);
     expect(prompts).toEqual([]);
+  });
+});
+
+describe('approve_batch: one approval for a series of actions', () => {
+  const WRITES: [string, Record<string, unknown>, string][] = [
+    ['send_message', { room: '!t:x', text: 'Bonjour à tous', reply_to: '$m1' }, 'send'],
+    ['react', { room: '!t:x', event_id: '$m1', emoji: '👍' }, 'react'],
+    ['edit_message', { room: '!dm:x', event_id: '$m1', text: 'corrigé' }, 'edit'],
+    ['redact_message', { room: '!dm:x', event_id: '$m1' }, 'redact'],
+    ['send_file', { room: '!t:x', path: `${DL}/does-not-exist.pdf` }, 'file'],
+    ['join_room', { room: '#public:x' }, 'join'],
+    ['leave_room', { room: '!t2:x' }, 'leave'],
+    ['create_room', { name: 'Projet X', invite: ['@bob:x'] }, 'create'],
+    ['invite_user', { room: '!t:x', user_id: '@bob:x' }, 'invite'],
+  ];
+  const hello = { room: '!t:x', text: 'Bonjour' };
+  const hello2 = { room: '!dm:x', text: 'Bonjour Alice' };
+
+  async function connect(answers: ('accept' | 'decline')[], opts: { mode?: 'elicit' | 'client' } = {}) {
+    const c = new FakeChat();
+    const server = new McpServer({ name: 't', version: '0' });
+    registerTools(server, c, directory, { timeZone: 'Europe/Paris', downloadDir: DL, approval: { mode: opts.mode ?? 'elicit', language: 'fr', timeoutMs: 2000 } });
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    await server.connect(st);
+    const cl = approvingClient(() => answers.shift() ?? 'decline');
+    await cl.connect(ct);
+    const callIt = async (name: string, args: Record<string, unknown>) => {
+      const r = (await cl.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
+      return { isError: Boolean(r.isError), text: r.content.map((x) => x.text).join('\n') };
+    };
+    const batchOf = async (actions: { tool: string; arguments: Record<string, unknown> }[]) => {
+      const r = await callIt('approve_batch', { actions });
+      return { ...r, batchId: /"batchId":"([0-9a-f]{32})"/.exec(r.text)?.[1] };
+    };
+    return { c, callIt, batchOf };
+  }
+
+  it('lists the write tools as WRITE_TOOLS', async () => {
+    const { WRITE_TOOLS } = await import('../src/approval.js');
+    expect([...WRITE_TOOLS].sort()).toEqual(WRITES.map(([n]) => n).sort());
+  });
+
+  it('sends two messages after one approval of the batch', async () => {
+    const t = await connect(['accept']);
+    const b = await t.batchOf([
+      { tool: 'send_message', arguments: hello },
+      { tool: 'send_message', arguments: hello2 },
+    ]);
+    expect(b.batchId, b.text).toBeDefined();
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('2 actions');
+    expect(prompts[0]).toContain('[1/2] Twake Chat : Envoyer un message');
+    expect(prompts[0]).toContain('Bonjour Alice');
+    expect(t.c.writes).toEqual([]);
+    expect((await t.callIt('send_message', { ...hello, batchId: b.batchId })).isError).toBe(false);
+    expect((await t.callIt('send_message', { ...hello2, batchId: b.batchId })).isError).toBe(false);
+    expect(prompts).toHaveLength(1);
+    expect(t.c.writes.map((w) => w[0])).toEqual(['send', 'send']);
+  });
+
+  it('asks again for a send_message whose arguments are not in the batch', async () => {
+    const t = await connect(['accept', 'accept']);
+    const b = await t.batchOf([{ tool: 'send_message', arguments: hello }]);
+    const r = await t.callIt('send_message', { ...hello, text: 'Autre chose', batchId: b.batchId });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('Autre chose');
+    expect(r.text).toContain('lot non utilisé');
+    expect(t.c.writes).toHaveLength(1);
+  });
+
+  it('writes nothing while preparing the batch', async () => {
+    const t = await connect(['decline']);
+    const b = await t.batchOf(WRITES.map(([tool, args]) => ({ tool, arguments: args })));
+    expect(b.batchId, b.text).toBeUndefined();
+    expect(b.text).toContain('Lot non approuvé');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(`${WRITES.length} actions`);
+    expect(t.c.writes).toEqual([]);
+  });
+
+  it('refuses a batch with a read tool', async () => {
+    const t = await connect(['accept']);
+    const b = await t.batchOf([
+      { tool: 'send_message', arguments: hello },
+      { tool: 'list_rooms', arguments: {} },
+    ]);
+    expect(b.isError).toBe(true);
+    expect(b.text).toContain('action 2.');
+    expect(prompts).toEqual([]);
+  });
+
+  it.each(WRITES)('%s runs once approved in a batch, without another question', async (tool, args, kind) => {
+    const t = await connect(['accept']);
+    const b = await t.batchOf([{ tool, arguments: args }]);
+    expect(b.batchId, b.text).toBeDefined();
+    expect(t.c.writes).toEqual([]);
+    const r = await t.callIt(tool, { ...args, batchId: b.batchId });
+    expect(r.text).not.toContain('lot non utilisé');
+    expect(prompts).toHaveLength(1);
+    expect(t.c.writes.map((w) => w[0])).toEqual([kind]);
+  });
+
+  it('creates no batch with MATRIX_APPROVAL=client', async () => {
+    const t = await connect([], { mode: 'client' });
+    const b = await t.batchOf([{ tool: 'send_message', arguments: hello }]);
+    expect(b.batchId).toBeUndefined();
+    expect(b.text).toContain('client');
   });
 });

@@ -6,7 +6,7 @@
 
 ## What is it?
 
-`mcp-twake-chat` is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. MCP is the open standard that lets AI assistants (Claude Desktop, Claude Code, Hermes Agent, Cursor, VS Code and many others) use external tools. This server exposes your chat to the assistant as **23 tools**: rooms, messages, threads, unread messages, mentions, full-text search (encrypted rooms included), people, attachments, drafts and, when you allow it, sending and room management.
+`mcp-twake-chat` is a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server. MCP is the open standard that lets AI assistants (Claude Desktop, Claude Code, Hermes Agent, Cursor, VS Code and many others) use external tools. This server exposes your chat to the assistant as **24 tools**: rooms, messages, threads, unread messages, mentions, full-text search (encrypted rooms included), people, attachments, drafts and, when you allow it, sending and room management.
 
 It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [matrix-js-sdk](https://github.com/matrix-org/matrix-js-sdk) and its Rust cryptography, so it reads **end-to-end encrypted** rooms like any Matrix client. It works with Twake Chat and with any Matrix homeserver (Synapse, Conduit…); the Twake-specific extras (company directory, recovery vault) come from the [ToM server](https://github.com/linagora/ToM-Server).
 
@@ -34,7 +34,7 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 
 ## Features
 
-### 23 MCP tools
+### 24 MCP tools
 
 | Category | Tools |
 |---|---|
@@ -49,6 +49,7 @@ It speaks the open [Matrix](https://spec.matrix.org) Client-Server API through [
 | Write ⚠️ | `send_message` (Markdown, replies, threads, mentions), `react`, `edit_message`, `send_file` (encrypted in encrypted rooms) |
 | Rooms ⚠️ | `create_room` (private, encrypted by default, or a direct message), `invite_user`, `join_room` (accept an invitation or join a public room) |
 | Destructive ⚠️ | `redact_message` (own messages only), `leave_room` |
+| Approval | `approve_batch` (one approval for a series of actions, see [below](#approving-a-series-of-writes-at-once)) |
 
 ⚠️ = acts in your name, visible to other people. Read tools carry `readOnlyHint`; `create_draft` is closed-world (`openWorldHint: false`); write tools carry `openWorldHint`, and `redact_message` and `leave_room` `destructiveHint`.
 
@@ -214,6 +215,10 @@ npx mcp-twake-chat call send_message --json @message.json
 - These rules stop an agent that follows instructions; they cannot stop a program that hides that it is an agent, or rewrites `cli.json`, under your account.
 - While another mcp-twake-chat uses the same device, `call` cannot open its store: use `npx mcp-twake-ai call chat …`, which goes through the running server, or point `TWAKE_MCP_CLI_SERVER` at it.
 - With [mcp-twake-ai](https://github.com/linagora/mcp-twake-ai), `npx mcp-twake-ai call chat …` does the same with your Twake.ai sign-in.
+
+## Approving a series of writes at once
+
+Before a series of actions (several messages, several invitations), an agent can ask you once for the whole list with `approve_batch`: you see every action, numbered, in one approval. Each call that then carries the `batchId` and matches a listed action exactly runs without another question, once, within 15 minutes. A call that is not in the list, or whose target changed since you approved, asks as usual. A batch approves exactly what each action's approval text shows; it belongs to the session that approved it (over HTTP, one session), and is forgotten when that session ends. With `MATRIX_APPROVAL=client`, there is no batch.
 
 ## Recommended safe configuration
 

@@ -5,6 +5,7 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 ## [Unreleased]
 
 ### Added
+- `approve_batch` lets an agent have a series of actions approved at once: one approval for the exact list, then each matching call (with `batchId`) runs without a question, once, within 15 minutes; anything else, or anything changed since, asks as usual.
 - `mcp-twake-chat call <tool>` and `mcp-twake-chat tools` call the server's tools from a terminal or a script, with `--arg key=value` or `--json`, the result on stdout and an exit code per outcome. A write typed in a terminal is approved without a question (`--i` asks first); started by an agent it is refused; without a terminal it needs `--yes --as <name>` for a name allowed with `mcp-twake-chat allow-unattended <name>`.
 
 ## [0.6.1] - 2026-11-11
