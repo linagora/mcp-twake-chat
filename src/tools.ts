@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { formatTime, matchRooms, type MessageView, type RoomView } from './format.js';
 import type { ChatService, Directory, NewRoom, SearchRequest } from './service.js';
 import { assertInside } from './files.js';
-import { Approver, ApprovalUnavailable, NotApproved, type ApprovalMode, type Language } from './approval.js';
+import { Approver, ApprovalUnavailable, NotApproved, WRITE_TOOLS, type ApprovalMode, type Language } from './approval.js';
+import { installBatch } from './batch/index.js';
 
 const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } as const;
 const DRAFT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false } as const;
@@ -76,6 +77,15 @@ export function registerTools(
   directory: Directory | undefined,
   opts: { timeZone: string; downloadDir?: string; uploadDir?: string; sendScope?: 'all' | 'dm'; approval?: { mode: ApprovalMode; language: Language; timeoutMs: number } },
 ): void {
+  // approve_batch, and batchId on every write tool: installed before the tools are registered (spec §5); the
+  // approver is built below, before any tool can be called
+  installBatch(server, {
+    writeTools: WRITE_TOOLS,
+    z,
+    confirm: (message) => approver.confirmText(message),
+    clientMode: () => approver.opts.mode === 'client',
+    language: () => approver.opts.language,
+  });
   const tz = opts.timeZone;
   const time = (ms: number) => formatTime(ms, tz);
 
