@@ -198,6 +198,23 @@ claude mcp add twake-chat --scope user \
 
 Do not configure the same device in two clients at once in stdio mode: the second one is refused by the store lock. Use the HTTP daemon instead, or give each client its own device (`mcp-twake-ai login --chat --agent <id>`).
 
+## From the command line
+
+Every tool of this server can be called from a terminal or a script, with the same configuration (`MATRIX_*` variables) as the server:
+
+```sh
+npx mcp-twake-chat tools                      # one line per tool
+npx mcp-twake-chat call list_rooms
+npx mcp-twake-chat call send_message --json @message.json
+```
+
+- `--arg key=value` is converted to the type the tool gives `key`; `--json` takes the whole arguments object (`@file`, or `-` for stdin). The result goes to stdout (`--json-output` for the raw result), everything else to stderr.
+- Exit codes: 0 done, 1 the tool answered with an error, 2 wrong command or argument, 3 a write was not approved, 4 the server could not be reached.
+- **Writes:** typed by you in a terminal, a write is approved without a question (`--i` asks first). Started by an agent (`CLAUDECODE` or `HERMES_HOME` set), a write is refused: agents write through their MCP tools, which ask you. Without a terminal (cron), a write is refused unless it passes `--yes --as <name>` for a name you allowed once, in a terminal, with `npx mcp-twake-chat allow-unattended <name>`. The allowed names are shared by the six Twake.ai servers, in `~/.config/twake-ai/cli.json` (`%USERPROFILE%\AppData\Roaming\twake-ai\cli.json` on Windows).
+- These rules stop an agent that follows instructions; they cannot stop a program that hides that it is an agent, or rewrites `cli.json`, under your account.
+- While another mcp-twake-chat uses the same device, `call` cannot open its store: use `npx mcp-twake-ai call chat …`, which goes through the running server, or point `TWAKE_MCP_CLI_SERVER` at it.
+- With [mcp-twake-ai](https://github.com/linagora/mcp-twake-ai), `npx mcp-twake-ai call chat …` does the same with your Twake.ai sign-in.
+
 ## Recommended safe configuration
 
 - Keep `MATRIX_APPROVAL=elicit` (the default): every action in your name waits for your OK on the exact room and text, whatever the assistant decides. For an assistant that must never act in your name, exclude the write tools (drafts only, example above). `MATRIX_SEND_SCOPE=dm` additionally keeps it out of group rooms.
