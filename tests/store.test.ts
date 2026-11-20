@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { acquireStoreLock, loadOrCreateStoreKey } from '../src/store.js';
+import { acquireStoreLock, exitCodeOf, loadOrCreateStoreKey, StoreInUseError } from '../src/store.js';
 
 const dir = () => mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), 'mcp-chat-store-'));
 
@@ -14,6 +14,33 @@ describe('acquireStoreLock', () => {
     expect(() => acquireStoreLock(d)).toThrow(/already used by process \d+/);
     lock.release();
     acquireStoreLock(d).release();
+  });
+
+  it('reports a store held by another living process with the exit code 75', () => {
+    const d = dir();
+    // the parent of this test process is alive and is not this process
+    writeFileSync(join(d, '.lock'), `${process.ppid}\n`);
+    let caught: unknown;
+    try {
+      acquireStoreLock(d);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(StoreInUseError);
+    expect((caught as Error).message).toMatch(new RegExp(`already used by process ${process.ppid}`));
+    expect(exitCodeOf(caught)).toBe(75);
+    expect(exitCodeOf(new Error('x'))).toBe(1);
+    // held by this very process: a plain error, not "another process"
+    const own = dir();
+    const lock = acquireStoreLock(own);
+    let mine: unknown;
+    try {
+      acquireStoreLock(own);
+    } catch (e) {
+      mine = e;
+    }
+    expect(mine).not.toBeInstanceOf(StoreInUseError);
+    lock.release();
   });
 
   it('takes over a lock left by a dead process', () => {
@@ -31,15 +58,23 @@ describe('loadOrCreateStoreKey', () => {
     const file = join(d, 'sub', 'store.key');
     const k1 = loadOrCreateStoreKey(file);
     expect(k1).toHaveLength(32);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(loadOrCreateStoreKey(file)).toEqual(k1);
+  });
+
+  it('takes its own key on Windows, where files have no POSIX mode (they read as 0666)', () => {
+    const d = dir();
+    const f = join(d, 'k');
+    writeFileSync(f, Buffer.alloc(32, 7).toString('base64'), { mode: 0o644 });
+    expect(loadOrCreateStoreKey(f, 'win32')).toEqual(new Uint8Array(Buffer.alloc(32, 7)));
+    expect(loadOrCreateStoreKey(join(d, 'sub', 'new.key'), 'win32')).toHaveLength(32);
   });
 
   it('rejects a key file readable by others or of the wrong size', () => {
     const d = dir();
     const f = join(d, 'k');
     writeFileSync(f, Buffer.alloc(32).toString('base64'), { mode: 0o644 });
-    expect(() => loadOrCreateStoreKey(f)).toThrow(/0600/);
+    expect(() => loadOrCreateStoreKey(f, 'linux')).toThrow(/0600/);
     writeFileSync(join(d, 'k2'), 'c2hvcnQ=', { mode: 0o600 });
     expect(() => loadOrCreateStoreKey(join(d, 'k2'))).toThrow(/32 bytes/);
   });

@@ -7,8 +7,6 @@
  *
  * Logs go to stderr only (stdout carries JSON-RPC in stdio mode).
  */
-import { readFileSync } from 'node:fs';
-import { createServer } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from './config.js';
@@ -16,7 +14,8 @@ import { discover } from './discovery.js';
 import { MatrixChat, type Log } from './matrix.js';
 import { CommandTokenProvider, StaticTokenProvider, type TokenSource } from './token.js';
 import { TomClient } from './tom.js';
-import { createMcpHttpHandler } from './http.js';
+import { serveHttp } from './shared-mode.js';
+import { exitCodeOf } from './store.js';
 import { registerTools } from './tools.js';
 import { fileURLToPath } from 'node:url';
 import { isCliCommand, runCliCommand } from './cli-call/index.js';
@@ -49,9 +48,12 @@ async function main(): Promise<void> {
   const chat = await MatrixChat.open({ config, endpoints, tokens, tom, log, sdkLogLevel: threshold <= LEVELS.debug ? 'debug' : 'error' });
 
   let closing = false;
+  let stopHttp: (() => Promise<void>) | undefined;
   const shutdown = async (code = 0) => {
     if (closing) return;
     closing = true;
+    // first the state file and the port (no client must find a server that is going), then the store
+    await stopHttp?.().catch(() => {});
     await chat.close().catch(() => {});
     process.exit(code);
   };
@@ -84,12 +86,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { host, port, tokenFile } = config.transport;
-  const secret = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined;
   // Sessions: an approval prompt sent during a tool call must reach the same server instance.
-  const handler = createMcpHttpHandler(newServer, { host, port, secret, log });
-  const http = createServer((req, res) => void handler(req, res));
-  http.listen(port, host, () => log('info', `${VERSION} ready on http://${host}:${port}/mcp${secret ? ' (bearer token required)' : ''}`));
+  // The shared mode (MCP_HTTP_STATE_FILE) publishes the server once it listens, and stops on its route or once idle.
+  const served = await serveHttp(newServer, {
+    ...config.transport,
+    version: VERSION,
+    identity: () => chat.identity(),
+    onStop: () => void shutdown(),
+    log,
+  });
+  stopHttp = served.close;
 }
 
 const cliArgs = process.argv.slice(2);
@@ -100,6 +106,7 @@ if (isCliCommand(cliArgs)) {
 } else {
   main().catch((e) => {
     process.stderr.write(`mcp-twake-chat: ${(e as Error).message}\n`);
-    process.exit(1);
+    // 75: the store is held by another process (another start won, or a server runs): a client then joins it
+    process.exit(exitCodeOf(e));
   });
 }

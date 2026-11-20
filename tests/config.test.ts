@@ -60,6 +60,16 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...base, MCP_TRANSPORT: 'http', MCP_HTTP_PORT: 'abc' })).toThrow(/MCP_HTTP_PORT/);
   });
 
+  it('takes port 0 (the system picks one), a state file and an idle exit for the shared mode', () => {
+    const config = loadConfig({ ...base, MCP_TRANSPORT: 'http', MCP_HTTP_PORT: '0', MCP_HTTP_STATE_FILE: '/tmp/x/server.json', MCP_HTTP_EXIT_WHEN_IDLE_MS: '600000' });
+    expect(config.transport).toEqual({ kind: 'http', host: '127.0.0.1', port: 0, stateFile: '/tmp/x/server.json', exitWhenIdleMs: 600000 });
+  });
+
+  it('refuses an idle exit that is not a positive number of milliseconds', () => {
+    expect(() => loadConfig({ ...base, MCP_TRANSPORT: 'http', MCP_HTTP_EXIT_WHEN_IDLE_MS: 'soon' })).toThrow(/MCP_HTTP_EXIT_WHEN_IDLE_MS/);
+    expect(() => loadConfig({ ...base, MCP_TRANSPORT: 'http', MCP_HTTP_EXIT_WHEN_IDLE_MS: '0' })).toThrow(/MCP_HTTP_EXIT_WHEN_IDLE_MS/);
+  });
+
   it('expands ~ in paths', () => {
     const c = loadConfig({ ...base, HOME: '/home/alice', MATRIX_STORE_DIR: '~/store', MATRIX_STORE_KEY_FILE: '~/k' });
     expect(c.storeDir).toBe('/home/alice/store');
