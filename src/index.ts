@@ -20,8 +20,8 @@ import { registerTools } from './tools.js';
 import { fileURLToPath } from 'node:url';
 import { isCliCommand, runCliCommand } from './cli-call/index.js';
 import { stopWhenStdinEnds } from './stdin-end.js';
+import { VERSION } from './version.js';
 
-const VERSION = '0.6.1';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
 const threshold = LEVELS[(process.env.LOG_LEVEL as keyof typeof LEVELS) ?? 'info'] ?? LEVELS.info;
 
