@@ -102,10 +102,16 @@ export function createMcpHttpHandler(newServer: () => McpServer, opts: HttpOptio
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     if (!req.url?.startsWith('/mcp')) return void res.writeHead(404).end();
+    // DNS rebinding: another name for this address is refused before any route (the transport checks it too)
+    if (!hostAllowed(req)) return void json(res, 403, { error: 'forbidden host' });
+    const shutdownRoute = req.url === '/mcp/shutdown' || req.url.startsWith('/mcp/shutdown?');
+    // without a token anyone on this machine could stop the server: no such route then
+    if (shutdownRoute && !opts.secret) return void res.writeHead(404).end();
     if (!authorized(req)) return void json(res, 401, { error: 'unauthorized' });
     // the shared mode is stopped by its clients with the token, never by a signal (Windows has none to catch)
-    if (req.url === '/mcp/shutdown' || req.url.startsWith('/mcp/shutdown?')) {
-      if (!hostAllowed(req)) return void json(res, 403, { error: 'forbidden host' });
+    if (shutdownRoute) {
+      // a web page sends an Origin (a cross-site POST needs no preflight); mcp-twake-ai sends none
+      if (req.headers.origin !== undefined) return void json(res, 403, { error: 'forbidden origin' });
       if (req.method !== 'POST') return void res.writeHead(405, { allow: 'POST' }).end();
       res.writeHead(202).end();
       opts.onShutdown?.();

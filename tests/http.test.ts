@@ -155,6 +155,49 @@ describe('shared mode: shutdown route and idle exit', () => {
     await s.close();
   });
 
+  /** a raw request with the headers a browser page would send */
+  function rawRequest(port: number, path: string, headers: Record<string, string>, method = 'POST'): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+        res.resume();
+        resolve(res.statusCode ?? 0);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('has no shutdown route without a token', async () => {
+    let stopped = 0;
+    const s = await serve({ secret: undefined, onShutdown: () => void stopped++ });
+    expect(await rawRequest(s.port, '/mcp/shutdown', { host: `127.0.0.1:${s.port}` })).toBe(404);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(0);
+    await s.close();
+  });
+
+  it('refuses a shutdown sent by a web page (an Origin header)', async () => {
+    let stopped = 0;
+    const s = await serve({ onShutdown: () => void stopped++ });
+    expect(await rawRequest(s.port, '/mcp/shutdown', { host: `127.0.0.1:${s.port}`, authorization: 'Bearer s3cret', origin: 'https://evil.example' })).toBe(403);
+    expect(await rawRequest(s.port, '/mcp/shutdown', { host: `127.0.0.1:${s.port}`, authorization: 'Bearer s3cret', origin: 'null' })).toBe(403);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(0);
+    expect(await rawRequest(s.port, '/mcp/shutdown', { host: `127.0.0.1:${s.port}`, authorization: 'Bearer s3cret' })).toBe(202);
+    await s.close();
+  });
+
+  it('refuses another host before any route, the token checked or not', async () => {
+    const s = await serve({});
+    expect(await rawRequest(s.port, '/mcp', { host: `evil.example.com:${s.port}` })).toBe(403);
+    expect(await rawRequest(s.port, '/mcp/shutdown', { host: `evil.example.com:${s.port}` })).toBe(403);
+    expect(await rawRequest(s.port, '/mcp', { host: `evil.example.com:${s.port}`, authorization: 'Bearer s3cret' })).toBe(403);
+    const open = await serve({ secret: undefined });
+    expect(await rawRequest(open.port, '/mcp', { host: `evil.example.com:${open.port}` })).toBe(403);
+    await open.close();
+    await s.close();
+  });
+
   it('exits once no session has been open for the idle delay, a ping without session not counting', async () => {
     let idle = 0;
     const s = await serve({ exitWhenIdleMs: 300, onIdle: () => void idle++ });
