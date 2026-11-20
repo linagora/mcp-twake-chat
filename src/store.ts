@@ -2,6 +2,19 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, closeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+/** The store is held by another living process: a server for this device runs, or is starting. */
+export class StoreInUseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StoreInUseError';
+  }
+}
+
+/** 75 (EX_TEMPFAIL) when the store is held by another process, so a client knows another start won; 1 otherwise. */
+export function exitCodeOf(error: unknown): number {
+  return error instanceof StoreInUseError ? 75 : 1;
+}
+
 /**
  * One Matrix device = one process. Two processes on the same crypto store
  * corrupt the Olm sessions, so the store directory carries an exclusive
@@ -31,7 +44,7 @@ export function acquireStoreLock(storeDir: string): { release(): void } {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       const pid = Number(readFileSync(file, 'utf8').trim());
       if (pid && pid !== process.pid && alive(pid)) {
-        throw new Error(
+        throw new StoreInUseError(
           `the Matrix device store ${storeDir} is already used by process ${pid}: run a single mcp-twake-chat per device (use the HTTP transport to share it)`,
         );
       }
