@@ -158,14 +158,15 @@ function alive(pid: number): boolean {
 }
 
 /** 32-byte key encrypting the crypto store, kept in a 0600 file (created on first use). */
-export function loadOrCreateStoreKey(file: string): Uint8Array {
+/** On Windows a file has no POSIX mode (stat reads 0666): its folder in the user's profile is what keeps it private. */
+export function loadOrCreateStoreKey(file: string, platform: NodeJS.Platform = process.platform): Uint8Array {
   if (!existsSync(file)) {
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     writeFileSync(file, `${randomBytes(32).toString('base64')}\n`, { mode: 0o600, flag: 'wx' });
     chmodSync(file, 0o600);
   }
   const mode = statSync(file).mode & 0o777;
-  if (mode & 0o077) throw new Error(`${file} is readable by group/others (mode ${mode.toString(8)}): chmod 0600 it`);
+  if (platform !== 'win32' && mode & 0o077) throw new Error(`${file} is readable by group/others (mode ${mode.toString(8)}): chmod 0600 it`);
   const key = Buffer.from(readFileSync(file, 'utf8').trim(), 'base64');
   if (key.length !== 32) throw new Error(`${file} must hold 32 bytes encoded in base64`);
   return new Uint8Array(key);

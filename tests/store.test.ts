@@ -58,15 +58,23 @@ describe('loadOrCreateStoreKey', () => {
     const file = join(d, 'sub', 'store.key');
     const k1 = loadOrCreateStoreKey(file);
     expect(k1).toHaveLength(32);
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(loadOrCreateStoreKey(file)).toEqual(k1);
+  });
+
+  it('takes its own key on Windows, where files have no POSIX mode (they read as 0666)', () => {
+    const d = dir();
+    const f = join(d, 'k');
+    writeFileSync(f, Buffer.alloc(32, 7).toString('base64'), { mode: 0o644 });
+    expect(loadOrCreateStoreKey(f, 'win32')).toEqual(new Uint8Array(Buffer.alloc(32, 7)));
+    expect(loadOrCreateStoreKey(join(d, 'sub', 'new.key'), 'win32')).toHaveLength(32);
   });
 
   it('rejects a key file readable by others or of the wrong size', () => {
     const d = dir();
     const f = join(d, 'k');
     writeFileSync(f, Buffer.alloc(32).toString('base64'), { mode: 0o644 });
-    expect(() => loadOrCreateStoreKey(f)).toThrow(/0600/);
+    expect(() => loadOrCreateStoreKey(f, 'linux')).toThrow(/0600/);
     writeFileSync(join(d, 'k2'), 'c2hvcnQ=', { mode: 0o600 });
     expect(() => loadOrCreateStoreKey(join(d, 'k2'))).toThrow(/32 bytes/);
   });
