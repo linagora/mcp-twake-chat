@@ -18,6 +18,8 @@ import { CommandTokenProvider, StaticTokenProvider, type TokenSource } from './t
 import { TomClient } from './tom.js';
 import { createMcpHttpHandler } from './http.js';
 import { registerTools } from './tools.js';
+import { fileURLToPath } from 'node:url';
+import { isCliCommand, runCliCommand } from './cli-call/index.js';
 
 const VERSION = '0.6.1';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
@@ -88,7 +90,14 @@ async function main(): Promise<void> {
   http.listen(port, host, () => log('info', `${VERSION} ready on http://${host}:${port}/mcp${secret ? ' (bearer token required)' : ''}`));
 }
 
-main().catch((e) => {
-  process.stderr.write(`mcp-twake-chat: ${(e as Error).message}\n`);
-  process.exit(1);
-});
+const cliArgs = process.argv.slice(2);
+if (isCliCommand(cliArgs)) {
+  // `call`, `tools` and `allow-unattended`: the server's tools from the command line.
+  // exitCode, not exit(): what was written on a piped stdout is flushed first
+  process.exitCode = await runCliCommand(cliArgs, { entry: fileURLToPath(import.meta.url) });
+} else {
+  main().catch((e) => {
+    process.stderr.write(`mcp-twake-chat: ${(e as Error).message}\n`);
+    process.exit(1);
+  });
+}
