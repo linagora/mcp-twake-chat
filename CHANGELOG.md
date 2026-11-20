@@ -4,6 +4,8 @@ All notable changes to mcp-twake-chat are documented here. The format follows [K
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-20
+
 ### Fixed
 - The server says its own version: 0.7.0 announced itself as 0.6.1 (in its log, its MCP `serverInfo` and the `serverVersion` of the shared mode's state file), the version was written by hand in the entry point. It is read from package.json, as in the other Twake.ai servers.
 
