@@ -20,6 +20,7 @@ import { createMcpHttpHandler } from './http.js';
 import { registerTools } from './tools.js';
 import { fileURLToPath } from 'node:url';
 import { isCliCommand, runCliCommand } from './cli-call/index.js';
+import { stopWhenStdinEnds } from './stdin-end.js';
 
 const VERSION = '0.6.1';
 const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 } as const;
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
 
   if (config.transport.kind === 'stdio') {
     await newServer().connect(new StdioServerTransport());
+    stopWhenStdinEnds(process.stdin, () => void shutdown());
     log('info', `${VERSION} ready on stdio`);
     return;
   }
