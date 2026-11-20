@@ -110,6 +110,7 @@ describe('shared mode: shutdown route and idle exit', () => {
     h.on('request', (req, res) => void handlerOf(req, res));
     return {
       port,
+      h,
       url: `http://127.0.0.1:${port}/mcp`,
       handlerOf,
       close: async () => {
@@ -141,6 +142,16 @@ describe('shared mode: shutdown route and idle exit', () => {
     expect((await fetch(`${s.url}/shutdown`, { method: 'POST', headers: { authorization: 'Bearer s3cret' } })).status).toBe(202);
     await new Promise((r) => setTimeout(r, 20));
     expect(stopped).toBe(1);
+    await s.close();
+  });
+
+  it('answers its shutdown before it lets the stop close the connections', async () => {
+    let s: Awaited<ReturnType<typeof serve>> | undefined;
+    // the stop at its quickest: every connection closed at once
+    s = await serve({ onShutdown: () => s?.h.closeAllConnections() });
+    for (let i = 0; i < 20; i++) {
+      expect((await fetch(`${s.url}/shutdown`, { method: 'POST', headers: { authorization: 'Bearer s3cret' } })).status).toBe(202);
+    }
     await s.close();
   });
 
